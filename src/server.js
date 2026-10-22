@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { randomBytes, randomUUID, timingSafeEqual, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { appError, EFFORTS } from './config.js';
+import { VERSION } from './version.js';
 
 const assets = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
@@ -10,7 +11,6 @@ const assets = new Map([
   ['/styles.css', ['styles.css', 'text/css; charset=utf-8']],
 ]);
 const publicDir = fileURLToPath(new URL('../public/', import.meta.url));
-const VERSION = '0.1.0';
 
 function json(res, status, data) {
   if (res.destroyed || res.writableEnded) return;
@@ -56,7 +56,13 @@ function normalize(input) {
   if (messages.at(-1)?.role !== 'user' || !messages.at(-1).content.trim()) throw appError('The final message must be a nonempty user message.');
   if (input.stream !== undefined && typeof input.stream !== 'boolean') throw appError('stream must be a boolean.');
   if (input.n !== undefined && input.n !== 1) throw appError('Only n=1 is supported.');
-  for (const key of ['tools', 'tool_choice', 'functions', 'function_call', 'response_format', 'temperature', 'top_p', 'max_tokens', 'max_completion_tokens', 'stop', 'logprobs', 'top_logprobs', 'seed', 'presence_penalty', 'frequency_penalty']) {
+  // Pi RPC does not expose per-prompt sampling controls. Accept the OpenAI
+  // temperature field for client compatibility, keeping Pi's model defaults.
+  if (input.temperature !== undefined && input.temperature !== null &&
+      (typeof input.temperature !== 'number' || !Number.isFinite(input.temperature) || input.temperature < 0 || input.temperature > 2)) {
+    throw appError('temperature must be a number between 0 and 2, or null.');
+  }
+  for (const key of ['tools', 'tool_choice', 'functions', 'function_call', 'response_format', 'top_p', 'max_tokens', 'max_completion_tokens', 'stop', 'logprobs', 'top_logprobs', 'seed', 'presence_penalty', 'frequency_penalty']) {
     if (input[key] !== undefined && input[key] !== null) throw appError(`${key} is not supported by the Pi RPC gateway.`, 400, 'unsupported_parameter');
   }
   if (input.reasoning_effort !== undefined && !EFFORTS.includes(input.reasoning_effort)) throw appError('Unsupported reasoning_effort.');

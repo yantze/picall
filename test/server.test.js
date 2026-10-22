@@ -102,6 +102,47 @@ test('SSE returns content deltas, a final reason, usage when requested and [DONE
   assert.ok(chunks.some((chunk) => chunk.usage?.total_tokens === 20));
 });
 
+test('OpenAI temperature is accepted without forwarding a sampling option to Pi', async (t) => {
+  const { request, runtime } = await setup(t);
+  const originalAcquire = runtime.acquire.bind(runtime);
+  let requests = 0;
+  runtime.acquire = async (options) => {
+    assert.equal(Object.hasOwn(options, 'temperature'), false);
+    const session = await originalAcquire(options);
+    const originalRun = session.run;
+    session.run = (prompt, options) => {
+      assert.equal(Object.hasOwn(options, 'temperature'), false);
+      requests++;
+      return originalRun(prompt, options);
+    };
+    return session;
+  };
+  for (const temperature of [0, 0.7, 2, null]) {
+    const response = await request('/v1/chat/completions', { method: 'POST', body: completion('Temperature compatibility', { temperature }) });
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.equal(result.choices[0].message.content, 'Hello from Pi (turn 1)');
+  }
+  const streamed = await request('/v1/chat/completions', { method: 'POST', body: completion('Temperature stream', { temperature: 1, stream: true }) });
+  assert.equal(streamed.status, 200);
+  const wire = await streamed.text();
+  const chunks = wire.split('\n').filter(line => line.startsWith('data: ') && line !== 'data: [DONE]').map(line => JSON.parse(line.slice(6)));
+  assert.equal(chunks.flatMap(chunk => chunk.choices || []).map(choice => choice.delta?.content || '').join(''), 'Hello from Pi (turn 1)');
+  assert.ok(wire.includes('data: [DONE]'));
+  assert.ok(!wire.includes('unsupported_parameter'));
+  assert.equal(requests, 5);
+});
+
+test('invalid OpenAI temperature values still return a clear validation error', async (t) => {
+  const { request, runtime } = await setup(t);
+  for (const temperature of [-1, 2.1, '0.7', true, {}, []]) {
+    const response = await request('/v1/chat/completions', { method: 'POST', body: completion('Hello', { temperature }) });
+    assert.equal(response.status, 400);
+    assert.match((await response.json()).error.message, /temperature.*between 0 and 2/);
+  }
+  assert.equal(runtime.list().length, 0);
+});
+
 test('API key protects OpenAI routes while the local management page stays accessible', async (t) => {
   const key = 'sk-test-private-secret';
   const { request } = await setup(t, { apiKey: key });

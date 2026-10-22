@@ -8,8 +8,9 @@ import { ConfigStore } from '../src/config.js';
 import { Logger } from '../src/logger.js';
 import { PiRuntime } from '../src/pi-rpc.js';
 import { createApp } from '../src/server.js';
+import { VERSION } from '../src/version.js';
 
-const usage = `PiCall 0.1.0 — local Pi-powered OpenAI API
+const usage = `PiCall ${VERSION} — local Pi-powered OpenAI API
 
 Usage: picall [--port 8787] [--host 127.0.0.1] [--workdir DIR] [--data-dir DIR]
        picall pi [Pi CLI options]
@@ -33,7 +34,7 @@ async function main() {
   for (let i = 0; i < args.length; i++) {
     const flag = args[i];
     if (flag === '--help' || flag === '-h') { console.log(usage); return; }
-    if (flag === '--version' || flag === '-v') { console.log('0.1.0'); return; }
+    if (flag === '--version' || flag === '-v') { console.log(VERSION); return; }
     if (!['--port', '--host', '--workdir', '--data-dir'].includes(flag) || !args[i + 1] || args[i + 1].startsWith('--')) throw new Error(`Unknown or incomplete option: ${flag}. Run picall --help.`);
     const value = args[++i];
     if (flag === '--port') options.port = Number(value);

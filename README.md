@@ -30,7 +30,7 @@ picall --workdir /absolute/path/to/your/project
 ```bash
 npm ci
 npm start -- --workdir /absolute/path/to/your/project
-# 或 npm pack 后 npm install -g ./yantze-picall-0.1.0.tgz
+# 或 npm pack 后 npm install -g ./yantze-picall-0.1.1.tgz
 ```
 
 启动后打开终端输出的本地管理地址，默认端口 **8787**。先刷新模型列表、选择模型，按模型能力设置 effort，然后保存。页面的日志入口可在新标签页中打开。
@@ -101,7 +101,9 @@ effort 支持 `off / minimal / low / medium / high / xhigh / max`，以具体模
 
 context window 留空使用模型默认值；填写数字会通过 Pi 的公开 extension API 设置当前进程的模型上下文预算，影响 Pi 的压缩和上下文管理。它**不会扩大提供商实际允许的上下文长度**，请填写该模型确实支持的值。无论是否自定义，都保留模型原有认证和工具能力。
 
-图片/音频、客户端 function calling、`temperature`、`top_p`、`max_tokens`、`max_completion_tokens`、`stop`、`response_format`、logprobs、seed 和 penalties 尚未映射到 Pi RPC；传入时返回 `400`，不会假装生效。工具由 Pi 内部执行，不会作为 OpenAI `tool_calls` 返回给调用端。暂不提供 `/v1/responses` 和 embeddings。
+`temperature` 接受 OpenAI 格式的 `0–2` 数字或 `null`，以兼容自动携带该参数的客户端。当前 Pi RPC 不提供逐请求设置 temperature 的命令，因此该字段不会下传，也不会改变 Pi 或上游模型原有的采样设置。
+
+图片/音频、客户端 function calling、`top_p`、`max_tokens`、`max_completion_tokens`、`stop`、`response_format`、logprobs、seed 和 penalties 尚未映射到 Pi RPC；传入时返回 `400`，不会假装生效。工具由 Pi 内部执行，不会作为 OpenAI `tool_calls` 返回给调用端。暂不提供 `/v1/responses` 和 embeddings。
 
 ## MCP、Skills、扩展
 
@@ -113,6 +115,20 @@ context window 留空使用模型默认值；填写数字会通过 Pi 的公开 
 - Pi packages：`picall pi install <package>`，随后创建新 PiCall 会话加载。
 
 页面第一版提供模型、推理、上下文、API key 和会话管理；MCP 和 packages 的安装配置使用 Pi CLI/配置文件。
+
+### 启动时为什么会克隆其他 Git 仓库？
+
+PiCall 自身不会克隆额外的网关仓库。Pi 会解析现有全局或项目 `settings.json` 中的 `packages` 配置，并自动安装缺失的 Git/npm 包；已安装的扩展也可能执行自己的初始化逻辑。因此启动时出现第三方仓库克隆，应先检查这些配置，具体来源需以本机配置和日志为准。
+
+如果希望保留已经安装的扩展，但禁止 Pi 在启动时下载缺失的包，可以使用 Pi 原生的启动离线选项：
+
+```bash
+PI_OFFLINE=1 picall --workdir /your/project
+# 直接打开 bundled Pi 时同样可使用：
+picall pi --offline
+```
+
+这会禁用 Pi 的启动网络操作（包括缺失 package 的自动安装），仍允许正常的模型请求。它不屏蔽已安装扩展自行发起的网络操作，也不会删除现有配置。实际全局配置目录受 `PI_CODING_AGENT_DIR` 影响，默认是 `~/.pi/agent`；项目配置位于 `--workdir` 下的 `.pi`。不要公开完整配置文件，其中可能包含凭据。
 
 ## 本地运行边界
 
