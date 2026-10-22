@@ -1,0 +1,7 @@
+node_modules/
+*.tgz
+.picall/
+.env
+coverage/
+*.log
+.DS_Store
