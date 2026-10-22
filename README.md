@@ -10,7 +10,7 @@
 - OpenAI 风格的 `/v1/models`、`/v1/chat/completions`，支持 JSON 和 SSE 流式响应。
 - 页面选择 `provider/model`、reasoning effort 和 context window，配置持久保存。
 - `/v1/*` 可配置 Bearer API key；本地管理页无需登录。
-- 独立日志标签页、实时事件、过滤搜索、会话查看与关闭。
+- 独立日志标签页、实时事件、过滤搜索、会话查看与关闭；试运行显示工具加载清单和实际调用状态。
 - 一个会话一个 Pi 子进程，支持 `X-Session-Id` 保留工具调用和多轮上下文。
 - 使用 Pi 原生模型认证、MCP、extensions、skills 和 Pi packages。
 
@@ -30,7 +30,7 @@ picall --workdir /absolute/path/to/your/project
 ```bash
 npm ci
 npm start -- --workdir /absolute/path/to/your/project
-# 或 npm pack 后 npm install -g ./yantze-picall-0.1.1.tgz
+# 或 npm pack 后 npm install -g ./yantze-picall-0.1.2.tgz
 ```
 
 启动后打开终端输出的本地管理地址，默认端口 **8787**。先刷新模型列表、选择模型，按模型能力设置 effort，然后保存。页面的日志入口可在新标签页中打开。
@@ -115,6 +115,28 @@ context window 留空使用模型默认值；填写数字会通过 Pi 的公开 
 - Pi packages：`picall pi install <package>`，随后创建新 PiCall 会话加载。
 
 页面第一版提供模型、推理、上下文、API key 和会话管理；MCP 和 packages 的安装配置使用 Pi CLI/配置文件。
+
+### 终端 Pi 能联网，试运行却说“没有搜索/浏览工具”？
+
+模型的自述不能代替实际工具诊断。试运行旁会展示 Pi 进程实际加载的工具名称、工作目录和配置目录；执行过程中会展示本轮工具名称和状态，不显示工具参数或输出正文。
+
+Pi 默认的 `read / bash / edit / write` 不含独立网页搜索、浏览工具。`bash` 可以使用本机的 curl 等程序发起 HTTP 请求；专门的搜索、网页抓取能力通常来自你配置的 MCP 或扩展。PiCall 不额外安装搜索服务，也不限制子进程联网；实际访问仍取决于本机网络、工具和凭据。
+
+PiCall 使用内置 Pi，而终端的 `pi` 也可能是其他版本、别名或携带额外 `-e` 参数的包装脚本。请对比 `pi --version` 与 `picall pi --version`，并使用相同工作目录和 `PI_CODING_AGENT_DIR`。已有 PiCall 会话不会自动重载新安装的工具，配置变化后请点击“新会话”。
+
+**项目资源信任会影响工具加载。** Pi 1.4 的 RPC 无法显示内置项目信任提示；默认没有保存信任决定时，项目 `.pi` 下的 MCP、扩展和其他受保护配置可能被跳过。页面的“项目资源信任”提供三个选项：
+
+- `default`：遵循 Pi 已保存的信任决定，保持默认行为。
+- `allow`：信任当前工作目录，允许加载该项目配置、MCP 和扩展；扩展会在 Pi 进程中执行。
+- `deny`：忽略项目中的受保护资源。
+
+仅当你信任当前项目的配置和扩展时选择 `allow`。也可以使用启动参数作出本次显式选择：
+
+```bash
+picall --workdir /your/trusted/project --project-trust allow
+```
+
+或在同一目录运行 `picall pi`，通过 `/trust` 保存你自己的信任决定，然后重新创建 PiCall 会话。PiCall 不会自动批准项目，也不会自动批准扩展请求的交互式确认。依赖弹窗选择、输入或确认的扩展仍需适配无交互运行；被取消的请求会记录在日志中。
 
 ### 启动时为什么会克隆其他 Git 仓库？
 

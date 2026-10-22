@@ -5,10 +5,10 @@ import { PiRuntime } from '../src/pi-rpc.js';
 
 const fakePi = fileURLToPath(new URL('./fixtures/fake-pi.mjs', import.meta.url));
 
-function createRuntime(t, overrides = {}) {
+function createRuntime(t, overrides = {}, options = {}) {
   const config = { workdir: process.cwd(), model: 'fake/fake-model', effort: 'medium', contextWindow: null,
     maxSessions: 8, idleTimeoutMinutes: 30, requestTimeoutSeconds: 5, ...overrides };
-  const runtime = new PiRuntime({ getConfig: () => config, command: { file: process.execPath, args: [fakePi] } });
+  const runtime = new PiRuntime({ getConfig: () => config, command: { file: process.execPath, args: [fakePi] }, ...options });
   t.after(() => runtime.close());
   return runtime;
 }
@@ -65,4 +65,17 @@ test('capacity rejects busy sessions, evicts idle sessions and preserves expired
   await assert.rejects(runtime.acquire({ sessionId: 'another' }), (error) => error.code === 'session_expired');
   const fresh = await runtime.acquire({ sessionId: 'fresh' });
   assert.equal((await fresh.run('New context')).text, 'Hello from Pi (turn 1)');
+});
+
+test('tool failure notifications expose names and states without query arguments or result content', { timeout: 10_000 }, async (t) => {
+  const logs = [];
+  const runtime = createRuntime(t, {}, { logger: { log: (level, message, details) => logs.push({ level, message, details }) } });
+  const session = await runtime.acquire({});
+  const notifications = [];
+  await session.run('TOOL_EVENTS: TOOL_FAIL', { onToolEvent: (event) => notifications.push(event) });
+  assert.deepEqual(notifications, [{ tool: 'web_probe', status: 'running' }, { tool: 'web_probe', status: 'failed' }]);
+  assert.ok(logs.some((entry) => entry.message === 'Pi tool_execution_end.' && entry.details.isError === true));
+  const exposed = JSON.stringify({ logs, notifications });
+  assert.ok(!exposed.includes('PICALL_PRIVATE_TOOL_QUERY'));
+  assert.ok(!exposed.includes('PICALL_PRIVATE_TOOL_RESULT'));
 });

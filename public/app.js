@@ -1,7 +1,7 @@
 'use strict';
 
 const $ = (id) => document.getElementById(id);
-const state = { config: null, status: null, models: [], logs: [], seenLogs: new Set(), paused: false, sessionId: null, controller: null, eventSource: null, toastTimer: null, logFloor: 0, latestLogTime: '' };
+const state = { config: null, status: null, models: [], logs: [], seenLogs: new Set(), paused: false, sessionId: null, controller: null, eventSource: null, toastTimer: null, logFloor: 0, latestLogTime: '', logConnected: false, toolRun: null };
 
 async function api(path, options = {}) {
   const response = await fetch(path, { ...options, headers: { 'Content-Type': 'application/json', ...options.headers } });
@@ -61,6 +61,8 @@ function applyConfig(config) {
   $('max-sessions').value = config.maxSessions ?? 8;
   $('idle-timeout').value = config.idleTimeoutMinutes ?? 30;
   $('workdir').value = config.workdir || '';
+  $('project-trust').value = config.projectTrust || 'default';
+  updateProjectTrustHelp();
   $('key-status').textContent = config.apiKeyConfigured ? '已启用' : '未启用';
   $('api-key').placeholder = config.apiKeyConfigured ? `当前 ${config.apiKeyPreview || '已设置'} · 留空保留` : '留空则无需密钥';
   $('disable-key').checked = false;
@@ -90,9 +92,118 @@ async function loadStatus() {
     $('connection').replaceChildren(dot('green'), document.createTextNode('服务在线'));
     $('pi-notice').hidden = !!result.pi?.available;
     $('pi-notice').textContent = result.pi?.error || '未检测到可用的 Pi。请安装 Pi 并完成模型认证后，再发送请求。';
+    renderRuntimeDiagnostics(result.pi);
   } catch {
     $('connection').replaceChildren(dot('red'), document.createTextNode('连接已断开'));
   }
+}
+
+function updateProjectTrustHelp() {
+  const value = $('project-trust').value;
+  $('project-trust-help').textContent = {
+    default: '遵循 Pi 已保存的项目资源信任；未信任时，项目扩展与 MCP 可能不会加载。',
+    allow: '保存后将信任当前工作目录，加载并执行该项目配置的扩展与 MCP。仅对你信任的项目启用；新会话生效。',
+    deny: '忽略当前工作目录的项目资源，不加载其中的扩展与 MCP；用户级配置仍由 Pi 管理。',
+  }[value];
+  $('project-trust-help').classList.toggle('trust-allow', value === 'allow');
+}
+
+function renderRuntimeDiagnostics(pi = {}) {
+  const hasTools = pi.available !== false && Array.isArray(pi.tools);
+  const tools = hasTools ? pi.tools.filter((name) => typeof name === 'string') : [];
+  const availableTools = pi.available !== false && Array.isArray(pi.availableTools) ? pi.availableTools.filter((name) => typeof name === 'string') : null;
+  $('tool-count').textContent = hasTools ? String(tools.length) : '—';
+  const fragment = document.createDocumentFragment();
+  if (tools.length) {
+    tools.forEach((name) => {
+      const tag = document.createElement('code');
+      tag.className = 'tool-chip';
+      tag.textContent = name;
+      fragment.append(tag);
+    });
+  } else {
+    const empty = document.createElement('span');
+    empty.className = 'small-muted';
+    empty.textContent = hasTools ? '当前没有启用工具' : '尚未获取工具名单';
+    fragment.append(empty);
+  }
+  $('tool-list').replaceChildren(fragment);
+  const builtins = new Set(['read', 'bash', 'powershell', 'edit', 'write', 'grep', 'find', 'ls']);
+  const onlyBasicTools = hasTools && tools.length > 0 && tools.every((name) => builtins.has(name));
+  if (onlyBasicTools) {
+    $('tool-guidance').textContent = `当前仅显示 Pi 基础工具。独立搜索 / 浏览工具通常由 MCP 或扩展提供；${tools.includes('bash') ? 'bash 可使用 curl 发起 HTTP 请求，Skill 也可指导其联网' : '启用 bash 后也可通过它发起 HTTP 请求'}。项目工具需确认 Pi 项目资源信任。`;
+  } else if (!hasTools) {
+    $('tool-guidance').textContent = pi.error || '尚未获取 Pi RPC 工具信息。请刷新诊断；模型的自述不能代替实际工具名单。';
+  } else {
+    $('tool-guidance').textContent = '以上为 Pi RPC 实际启用的工具。独立搜索 / 浏览工具由扩展或 MCP 提供；工具名称本身不能证明网络可用性。';
+  }
+  $('runtime-version').textContent = pi.version || '未获取';
+  $('runtime-workdir').textContent = pi.workdir || state.config?.workdir || '未获取';
+  $('runtime-agent-dir').textContent = pi.agentDir || '未获取';
+  $('runtime-offline').textContent = typeof pi.offlineStartup === 'boolean' ? `${pi.offlineStartup ? '启用' : '未启用'}（不据此判断工具能否联网）` : '未获取';
+  $('runtime-available-tools').textContent = availableTools ? (availableTools.join(' · ') || '无') : '未获取';
+}
+
+function observeToolLog(log) {
+  const run = state.toolRun;
+  if (!run?.sessionId || log.details?.sessionId !== run.sessionId) return;
+  const timestamp = Date.parse(log.time);
+  if (!Number.isFinite(timestamp) || timestamp < run.startedAt || (run.endedAt && timestamp > run.endedAt)) return;
+  if (!['Pi tool_execution_start.', 'Pi tool_execution_end.'].includes(log.message) || typeof log.details.tool !== 'string') return;
+  const eventKey = `${log.time}:${log.id}`;
+  if (run.seen.has(eventKey)) return;
+  run.seen.add(eventKey);
+  const name = log.details.tool;
+  if (log.message === 'Pi tool_execution_start.') {
+    run.calls.push({ name, status: run.phase === 'running' ? 'running' : 'unconfirmed' });
+  } else {
+    const call = run.calls.find((item) => item.name === name && ['running', 'unconfirmed', 'cancelled'].includes(item.status));
+    if (call) call.status = log.details.isError ? 'error' : 'complete';
+    else run.calls.push({ name, status: log.details.isError ? 'error' : 'complete' });
+  }
+  renderToolRun();
+}
+
+function finishToolRun(phase) {
+  const run = state.toolRun;
+  if (!run) return;
+  run.phase = phase;
+  run.endedAt = Date.now();
+  run.calls.forEach((call) => {
+    if (call.status === 'running') call.status = phase === 'complete' ? 'unconfirmed' : 'cancelled';
+  });
+  renderToolRun();
+}
+
+function renderToolRun() {
+  const run = state.toolRun;
+  $('tool-run').hidden = !run;
+  if (!run) { $('tool-run-list').replaceChildren(); return; }
+  $('tool-run-count').textContent = `${run.calls.length} 次`;
+  let note;
+  if (run.phase === 'running') {
+    note = run.calls.length ? '工具事件来自本轮会话的运行日志。' : '等待本轮工具调用事件；工具是否调用由 Pi 决定。';
+    if (!state.logConnected) note += ' 日志通道正在重连，观测可能不完整。';
+  } else if (run.calls.length) {
+    note = run.phase === 'complete' ? '本轮已结束。以下为实际观测到的工具调用。' : '本轮已停止或执行失败，以下保留已观测的工具调用。';
+  } else {
+    note = `${run.phase === 'complete' ? '本轮已结束' : '本轮已停止或执行失败'}，未观察到工具调用事件；这不代表工具不可用。`;
+  }
+  if (run.calls.length > 30) note += ' 仅显示最近 30 次，完整事件可在日志页查看。';
+  $('tool-run-note').textContent = note;
+  const labels = { running: '执行中', complete: '已完成', error: '执行失败', cancelled: '已中断', unconfirmed: '状态未确认' };
+  const fragment = document.createDocumentFragment();
+  run.calls.slice(-30).forEach((call) => {
+    const row = document.createElement('li');
+    row.className = `tool-call ${call.status}`;
+    const name = document.createElement('code');
+    name.textContent = call.name;
+    const status = document.createElement('span');
+    status.textContent = labels[call.status];
+    row.append(name, status);
+    fragment.append(row);
+  });
+  $('tool-run-list').replaceChildren(fragment);
 }
 
 async function loadModels(userTriggered = false) {
@@ -120,6 +231,7 @@ async function loadModels(userTriggered = false) {
 
 async function saveConfig(event) {
   event.preventDefault();
+  if (state.controller) { toast('请等待本轮完成或停止后，再保存设置。', true); return; }
   $('save-button').disabled = true;
   const patch = {
     model: $('model').value.trim(),
@@ -127,6 +239,7 @@ async function saveConfig(event) {
     contextWindow: $('context-window').value ? Number($('context-window').value) : null,
     maxSessions: Number($('max-sessions').value),
     idleTimeoutMinutes: Number($('idle-timeout').value),
+    projectTrust: $('project-trust').value,
   };
   if ($('disable-key').checked) patch.apiKey = '';
   else if ($('api-key').value) patch.apiKey = $('api-key').value;
@@ -134,6 +247,8 @@ async function saveConfig(event) {
     const config = await api('/api/config', { method: 'PUT', body: JSON.stringify(patch) });
     if (patch.apiKey === '') $('api-key').value = '';
     state.sessionId = null;
+    state.toolRun = null;
+    renderToolRun();
     applyConfig(config);
     $('save-state').replaceChildren(dot('green'), document.createTextNode('已保存到本机'));
     toast('设置已保存，新会话将使用新配置。');
@@ -198,6 +313,7 @@ async function loadSessions() {
 }
 
 function addLog(log) {
+  observeToolLog(log);
   const highestKnown = Math.max(state.logFloor, ...state.logs.map((item) => item.id));
   if (log.id <= highestKnown && log.time > state.latestLogTime) {
     // A new server starts its sequence at one. Keep ordinary reconnects intact.
@@ -286,10 +402,14 @@ function connectLogs() {
     try { addLog(JSON.parse(event.data)); } catch { /* Ignore incomplete events. */ }
   });
   source.onopen = () => {
+    state.logConnected = true;
+    renderToolRun();
     if (!state.paused) $('log-live').replaceChildren(dot('green'), document.createTextNode('实时更新'));
     void refreshLogHistory();
   };
   source.onerror = () => {
+    state.logConnected = false;
+    renderToolRun();
     if (!state.paused) $('log-live').replaceChildren(dot('red'), document.createTextNode('正在重连'));
   };
 }
@@ -305,7 +425,11 @@ async function runPrompt(event) {
     return;
   }
   state.controller = new AbortController();
+  state.toolRun = { startedAt: Date.now(), endedAt: null, sessionId: state.sessionId, phase: 'running', calls: [], seen: new Set() };
+  renderToolRun();
   $('run-button').disabled = true;
+  $('new-session').disabled = true;
+  $('save-button').disabled = true;
   $('response-box').hidden = false;
   $('stop-button').hidden = false;
   $('response-output').textContent = '';
@@ -314,6 +438,7 @@ async function runPrompt(event) {
   if (state.config.apiKeyConfigured) headers.Authorization = `Bearer ${$('api-key').value}`;
   if (state.sessionId) headers['X-Session-Id'] = state.sessionId;
   const started = performance.now();
+  let outcome = 'error';
   try {
     const response = await fetch('/v1/chat/completions', { method: 'POST', headers, signal: state.controller.signal, body: JSON.stringify({ model: state.config.model || 'pi', messages: [{ role: 'user', content: prompt }], stream: true, stream_options: { include_usage: true } }) });
     if (!response.ok) {
@@ -321,6 +446,8 @@ async function runPrompt(event) {
       throw new Error(error.error?.message || `请求失败 (${response.status})`);
     }
     state.sessionId = response.headers.get('X-Session-Id') || state.sessionId;
+    state.toolRun.sessionId = state.sessionId;
+    state.logs.forEach(observeToolLog);
     $('response-meta').textContent = 'Pi 正在执行任务…';
     if (!response.body) throw new Error('浏览器不支持流式响应');
     const reader = response.body.getReader();
@@ -348,15 +475,19 @@ async function runPrompt(event) {
     const duration = ((performance.now() - started) / 1000).toFixed(1);
     $('response-meta').textContent = `完成 · ${duration}s${usage?.total_tokens ? ` · ${usage.total_tokens} tokens` : ''}${state.sessionId ? ` · 会话 ${state.sessionId.slice(0, 12)}` : ''}`;
     if (!$('response-output').textContent) $('response-output').textContent = '任务已完成，未返回文本内容。';
+    outcome = 'complete';
   } catch (error) {
     // A cancelled or failed Pi turn can invalidate the process lease. Start a
     // fresh conversation on the next attempt instead of reusing a tombstone.
     state.sessionId = null;
-    if (error.name === 'AbortError') $('response-meta').textContent = '请求已停止';
+    if (error.name === 'AbortError') { outcome = 'cancelled'; $('response-meta').textContent = '请求已停止'; }
     else { $('response-meta').textContent = `请求失败：${error.message}`; toast(error.message, true); }
   } finally {
+    finishToolRun(outcome);
     state.controller = null;
     $('run-button').disabled = false;
+    $('new-session').disabled = false;
+    $('save-button').disabled = false;
     $('stop-button').hidden = true;
     void Promise.all([loadStatus(), loadSessions()]);
   }
@@ -366,6 +497,11 @@ document.querySelectorAll('[data-view]').forEach((button) => button.addEventList
 window.addEventListener('popstate', () => showView(new URL(location.href).searchParams.get('tab') === 'logs' ? 'logs' : 'overview', false));
 $('config-form').addEventListener('submit', saveConfig);
 $('reload-models').addEventListener('click', () => loadModels(true));
+$('project-trust').addEventListener('change', updateProjectTrustHelp);
+$('refresh-tools').addEventListener('click', async () => {
+  $('refresh-tools').disabled = true;
+  try { await loadStatus(); } finally { $('refresh-tools').disabled = false; }
+});
 $('refresh-sessions').addEventListener('click', loadSessions);
 $('refresh-button').addEventListener('click', () => { void refresh(); });
 $('copy-endpoint').addEventListener('click', () => copy(baseUrl(), '接口地址'));
@@ -390,6 +526,8 @@ $('generate-key').addEventListener('click', async () => {
 $('playground-form').addEventListener('submit', runPrompt);
 $('new-session').addEventListener('click', () => {
   state.sessionId = null;
+  state.toolRun = null;
+  renderToolRun();
   toast('下次请求将开启新会话。');
 });
 $('stop-button').addEventListener('click', () => state.controller?.abort());

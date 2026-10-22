@@ -4,10 +4,11 @@ import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 
 export const EFFORTS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+export const PROJECT_TRUST = ['default', 'allow', 'deny'];
 export const DEFAULTS = Object.freeze({
   host: '127.0.0.1', port: 8787, model: '', effort: 'medium', contextWindow: null,
   apiKey: '', workdir: process.cwd(), maxSessions: 8, idleTimeoutMinutes: 30,
-  requestTimeoutSeconds: 300,
+  requestTimeoutSeconds: 300, projectTrust: 'default',
 });
 
 export function appError(message, status = 400, code = 'invalid_request') {
@@ -26,6 +27,7 @@ function validate(values) {
   }
   if (typeof values.model !== 'string' || values.model.length > 300 || (values.model && !/^[^\s/]+\/[^\s]+$/.test(values.model))) throw appError('model must use provider/model format.');
   if (!EFFORTS.includes(values.effort)) throw appError('Unsupported effort.');
+  if (!PROJECT_TRUST.includes(values.projectTrust)) throw appError('projectTrust must be default, allow, or deny.');
   if (values.contextWindow !== null && (!Number.isInteger(values.contextWindow) || values.contextWindow < 1024 || values.contextWindow > 10000000)) throw appError('contextWindow must be null or an integer between 1024 and 10000000.');
   if (typeof values.apiKey !== 'string' || (values.apiKey && (!/^[\x21-\x7e]{8,256}$/.test(values.apiKey)))) throw appError('API key must contain 8–256 visible ASCII characters (or be empty to disable authentication).');
   if (typeof values.workdir !== 'string' || !isAbsolute(values.workdir)) throw appError('workdir must be an absolute path.');
@@ -55,7 +57,7 @@ export class ConfigStore {
   update(patch) {
     const operation = this.queue.then(async () => {
       if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw appError('Settings must be a JSON object.');
-      const allowed = ['model', 'effort', 'contextWindow', 'apiKey', 'maxSessions', 'idleTimeoutMinutes', 'requestTimeoutSeconds'];
+      const allowed = ['model', 'effort', 'contextWindow', 'apiKey', 'maxSessions', 'idleTimeoutMinutes', 'requestTimeoutSeconds', 'projectTrust'];
       for (const key of Object.keys(patch)) if (!allowed.includes(key)) throw appError(`Setting is read-only or unknown: ${key}`);
       const next = { ...this.value, ...patch };
       validate(next);

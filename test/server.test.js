@@ -62,6 +62,11 @@ test('health, static UI, status and models are served without model traffic', as
   assert.equal(statusResponse.status, 200);
   const status = await statusResponse.json();
   assert.equal(status.pi.available, true);
+  assert.deepEqual(new Set(status.pi.tools), new Set(['read', 'bash']));
+  assert.deepEqual(new Set(status.pi.availableTools), new Set(['read', 'bash', 'fixture_inactive']));
+  assert.equal(typeof status.pi.workdir, 'string');
+  assert.equal(typeof status.pi.agentDir, 'string');
+  assert.equal(typeof status.pi.offlineStartup, 'boolean');
   assert.equal(status.sessions.total, 0);
   const modelsResponse = await request('/v1/models');
   assert.equal(modelsResponse.status, 200);
@@ -354,6 +359,39 @@ test('an explicitly cleared system prompt cannot silently reuse earlier system i
   const followup = await request('/v1/chat/completions', { method: 'POST', headers: { 'x-session-id': first.headers.get('x-session-id') }, body: {
     model: 'fake/fake-model', messages: [{ role: 'system', content: '' }, { role: 'user', content: 'Hello again' }],
   } });
+  assert.equal(followup.status, 409);
+  assert.equal((await followup.json()).error.code, 'session_configuration_changed');
+});
+
+test('project trust defaults safely, persists valid decisions and rejects unknown values atomically', { timeout: 10_000 }, async (t) => {
+  const { request, configStore, dataDir } = await setup(t);
+  assert.equal((await (await request('/api/config')).json()).projectTrust, 'default');
+  for (const projectTrust of ['allow', 'deny', 'default']) {
+    const response = await request('/api/config', { method: 'PUT', body: { projectTrust } });
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).projectTrust, projectTrust);
+    const reloaded = new ConfigStore({ dataDir, overrides: { workdir: dataDir } });
+    await reloaded.load();
+    assert.equal(reloaded.value.projectTrust, projectTrust);
+  }
+  const before = await readFile(configStore.path, 'utf8');
+  for (const projectTrust of ['approve', 'always', '', null, true]) {
+    const response = await request('/api/config', { method: 'PUT', body: { projectTrust } });
+    assert.equal(response.status, 400);
+    assert.equal(await readFile(configStore.path, 'utf8'), before);
+    assert.equal(configStore.value.projectTrust, 'default');
+  }
+});
+
+test('changing project trust requires a fresh session rather than retaining earlier loaded project tools', { timeout: 10_000 }, async (t) => {
+  const { request } = await setup(t);
+  const first = await request('/v1/chat/completions', { method: 'POST', body: completion('First question') });
+  assert.equal(first.status, 200);
+  await first.json();
+  const saved = await request('/api/config', { method: 'PUT', body: { projectTrust: 'allow' } });
+  assert.equal(saved.status, 200);
+  const followup = await request('/v1/chat/completions', { method: 'POST', body: completion('Follow-up'),
+    headers: { 'x-session-id': first.headers.get('x-session-id') } });
   assert.equal(followup.status, 409);
   assert.equal((await followup.json()).error.code, 'session_configuration_changed');
 });

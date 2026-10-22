@@ -44,6 +44,8 @@ function handle(command) {
       response(command, { levels: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] });
       break;
     case 'get_state':
+      emit({ type: 'extension_ui_request', method: 'setStatus', statusKey: 'picall_runtime',
+        statusText: JSON.stringify({ activeTools: ['read', 'bash'], availableTools: ['read', 'bash', 'fixture_inactive'] }) });
       response(command, { model: model(), thinkingLevel, isStreaming: running, sessionId: `fake-${process.pid}`, messages: [] });
       break;
     case 'set_model':
@@ -72,6 +74,14 @@ function handle(command) {
       const prompt = String(command.message || '');
       pendingTimer = setTimeout(() => {
         if (!running) return;
+        if (prompt.includes('TOOL_EVENTS:')) {
+          emit({ type: 'tool_execution_start', toolName: 'web_probe', toolCallId: 'fixture-tool-call',
+            args: { query: 'PICALL_PRIVATE_TOOL_QUERY' } });
+          emit({ type: 'tool_execution_update', toolName: 'web_probe', toolCallId: 'fixture-tool-call',
+            partialResult: { content: [{ type: 'text', text: 'PICALL_PRIVATE_TOOL_RESULT' }] } });
+          emit({ type: 'tool_execution_end', toolName: 'web_probe', toolCallId: 'fixture-tool-call',
+            isError: prompt.includes('TOOL_FAIL'), result: { content: [{ type: 'text', text: 'PICALL_PRIVATE_TOOL_RESULT' }] } });
+        }
         if (prompt.includes('FAIL_PROVIDER:')) {
           emit({ type: 'message_end', message: { ...message(''), stopReason: 'error', errorMessage: 'Fake provider failed' } });
           running = false;

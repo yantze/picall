@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PiRuntime } from '../src/pi-rpc.js';
@@ -63,8 +63,13 @@ test('bundled Pi applies context/effort and executes a complete tool loop', { ti
     const state = await session.worker.send({ type: 'get_state' });
     assert.equal(state.model.contextWindow, 32_000);
     assert.equal(state.thinkingLevel, 'medium');
+    assert.ok(session.snapshot.tools.includes('bash'));
+    assert.ok(session.snapshot.availableTools.includes('bash'));
     let streamed = '';
-    const result = await session.run('Run bash to print picall-real-tool-ok and report completion.', { onText: (delta) => { streamed += delta; } });
+    const toolEvents = [];
+    const result = await session.run('Run bash to print picall-real-tool-ok and report completion.', {
+      onText: (delta) => { streamed += delta; }, onToolEvent: (event) => toolEvents.push(event),
+    });
     assert.equal(result.text, 'Real Pi completed the tool loop.');
     assert.equal(streamed, result.text);
     assert.deepEqual(result.usage, { prompt_tokens: 90, completion_tokens: 25, total_tokens: 115 });
@@ -73,6 +78,9 @@ test('bundled Pi applies context/effort and executes a complete tool loop', { ti
     assert.ok(JSON.stringify(calls[0].messages).includes('Picall integration marker'));
     assert.ok(calls[1].messages.some((message) => message.role === 'tool' && message.content.includes('picall-real-tool-ok')));
     assert.ok(events.some((event) => event.message === 'Pi tool_execution_end.' && event.details.isError === false));
+    assert.deepEqual(toolEvents, [{ tool: 'bash', status: 'running' }, { tool: 'bash', status: 'completed' }]);
+    assert.ok(!JSON.stringify(toolEvents).includes('picall-real-tool-ok'));
+    assert.ok(!JSON.stringify(events).includes('picall-real-tool-ok'));
     assert.equal(session.busy, false);
   } finally {
     await runtime?.close();
@@ -81,5 +89,55 @@ test('bundled Pi applies context/effort and executes a complete tool loop', { ti
     if (previousProfile === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousProfile;
     await rm(profile, { recursive: true, force: true });
+  }
+});
+
+test('project tools are only loaded after explicit trust and diagnostics follow the current trust policy', { timeout: 60_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'picall-project-trust-'));
+  const profile = join(root, 'profile');
+  const workdir = join(root, 'project');
+  const extensions = join(workdir, '.pi', 'extensions');
+  const previousProfile = process.env.PI_CODING_AGENT_DIR;
+  let runtime;
+  try {
+    await mkdir(profile, { recursive: true });
+    await mkdir(extensions, { recursive: true });
+    await writeFile(join(extensions, 'web-probe.js'), `export default function(pi) {
+      pi.registerTool({ name: 'web_probe', label: 'Web probe', description: 'A local test search tool.',
+        parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
+        async execute() { return { content: [{ type: 'text', text: 'local search fixture' }] }; }
+      });
+    }\n`);
+    await writeFile(join(profile, 'models.json'), JSON.stringify({ providers: { 'picall-test': {
+      baseUrl: 'http://127.0.0.1:1/v1', api: 'openai-completions', apiKey: 'local-test-fixture',
+      models: [{ id: 'trust-test', name: 'Trust Test', contextWindow: 32_000, maxTokens: 1024,
+        reasoning: false, input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }],
+    } } }), { mode: 0o600 });
+    process.env.PI_CODING_AGENT_DIR = profile;
+    const config = { workdir, model: 'picall-test/trust-test', effort: 'off', projectTrust: 'default', requestTimeoutSeconds: 15 };
+    runtime = new PiRuntime({ getConfig: () => config });
+    for (const projectTrust of ['default', 'allow', 'deny', 'default']) {
+      config.projectTrust = projectTrust;
+      const diagnostic = await runtime.check();
+      assert.equal(diagnostic.available, true, diagnostic.error);
+      assert.equal(diagnostic.workdir, workdir);
+      assert.equal(diagnostic.agentDir, profile);
+      assert.equal(typeof diagnostic.offlineStartup, 'boolean');
+      assert.ok(diagnostic.tools.includes('bash'));
+      assert.ok(diagnostic.availableTools.includes('bash'));
+      assert.equal(diagnostic.tools.includes('web_probe'), projectTrust === 'allow', `${projectTrust}: active tools`);
+      assert.equal(diagnostic.availableTools.includes('web_probe'), projectTrust === 'allow', `${projectTrust}: available tools`);
+      const session = await runtime.acquire({});
+      assert.equal(session.snapshot.workdir, workdir);
+      assert.equal(session.snapshot.agentDir, profile);
+      assert.equal(typeof session.snapshot.offlineStartup, 'boolean');
+      assert.equal(session.snapshot.tools.includes('web_probe'), projectTrust === 'allow', `${projectTrust}: session tools`);
+      assert.equal(session.snapshot.availableTools.includes('web_probe'), projectTrust === 'allow', `${projectTrust}: session available tools`);
+    }
+  } finally {
+    await runtime?.close();
+    if (previousProfile === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousProfile;
+    await rm(root, { recursive: true, force: true });
   }
 });

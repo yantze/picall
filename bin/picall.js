@@ -13,11 +13,14 @@ import { VERSION } from '../src/version.js';
 const usage = `PiCall ${VERSION} — local Pi-powered OpenAI API
 
 Usage: picall [--port 8787] [--host 127.0.0.1] [--workdir DIR] [--data-dir DIR]
+              [--project-trust default|allow|deny]
        picall pi [Pi CLI options]
        picall --help | --version
 
 The management UI has no login. Only loopback hosts are supported.
 Pi uses its normal provider credentials, extensions, skills and MCP configuration.
+Project trust defaults to Pi's saved decisions. Use allow only for a project
+whose extensions and configuration you trust; deny skips project resources.
 Use the bundled Pi CLI for login: picall pi (then type /login)
 `;
 async function main() {
@@ -35,12 +38,13 @@ async function main() {
     const flag = args[i];
     if (flag === '--help' || flag === '-h') { console.log(usage); return; }
     if (flag === '--version' || flag === '-v') { console.log(VERSION); return; }
-    if (!['--port', '--host', '--workdir', '--data-dir'].includes(flag) || !args[i + 1] || args[i + 1].startsWith('--')) throw new Error(`Unknown or incomplete option: ${flag}. Run picall --help.`);
+    if (!['--port', '--host', '--workdir', '--data-dir', '--project-trust'].includes(flag) || !args[i + 1] || args[i + 1].startsWith('--')) throw new Error(`Unknown or incomplete option: ${flag}. Run picall --help.`);
     const value = args[++i];
     if (flag === '--port') options.port = Number(value);
     if (flag === '--host') options.host = value;
     if (flag === '--workdir') options.workdir = resolve(value);
     if (flag === '--data-dir') dataDir = resolve(value);
+    if (flag === '--project-trust') options.projectTrust = value;
   }
   options.workdir = await realpath(options.workdir || process.cwd());
   if (!(await stat(options.workdir)).isDirectory()) throw new Error('workdir must be a directory.');

@@ -1,13 +1,37 @@
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { readFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
+import { homedir } from 'node:os';
 
-const extensionPath = fileURLToPath(new URL('./extensions/context-window.mjs', import.meta.url));
+const extensionPath = fileURLToPath(new URL('./extensions/runtime.mjs', import.meta.url));
 const MAX_RECORD_BYTES = 16 * 1024 * 1024;
 const MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
+const MAX_TOOLS = 512;
+const MAX_TOOL_NAME_LENGTH = 256;
+
+function toolNames(values) {
+  if (!Array.isArray(values)) return [];
+  return [...new Set(values.filter((name) => typeof name === 'string' &&
+    name.length > 0 && name.length <= MAX_TOOL_NAME_LENGTH && !/[\u0000-\u001f\u007f]/.test(name)))]
+    .slice(0, MAX_TOOLS).sort();
+}
+
+function runtimeContext(workdir, command) {
+  const configuredDir = process.env.PI_CODING_AGENT_DIR || join(homedir(), '.pi', 'agent');
+  const agentDir = resolve(workdir, configuredDir === '~' ? homedir() : configuredDir.replace(/^~[/\\]/, `${homedir()}/`));
+  return {
+    workdir,
+    agentDir,
+    offlineStartup: command?.args?.includes('--offline') || /^(1|true|yes)$/i.test(process.env.PI_OFFLINE || ''),
+  };
+}
+
+function copySnapshot(value) {
+  return { ...value, tools: [...value.tools], availableTools: [...value.availableTools] };
+}
 
 function failure(message, status = 502, code = 'pi_error') {
   return Object.assign(new Error(message), { status, code });
@@ -20,18 +44,22 @@ function bundledCommand() {
 }
 
 class RpcWorker extends EventEmitter {
-  constructor(command, { cwd, model, effort, contextWindow, systemPrompt, logger }) {
+  constructor(command, { cwd, model, effort, contextWindow, systemPrompt, projectTrust, logger }) {
     super();
     this.pending = new Map();
     this.sequence = 0;
     this.closed = false;
     this.buffer = '';
     this.stderr = '';
-    const args = [...command.args, '--mode', 'rpc', '--no-session'];
+    this.context = runtimeContext(cwd, command);
+    this.metadata = { activeTools: [], availableTools: [] };
+    this.metadataKnown = false;
+    const args = [...command.args, '--mode', 'rpc', '--no-session', '--extension', extensionPath];
+    if (projectTrust === 'allow') args.push('--approve');
+    if (projectTrust === 'deny') args.push('--no-approve');
     if (model) args.push('--model', model);
     if (effort) args.push('--thinking', effort);
     if (systemPrompt) args.push('--append-system-prompt', systemPrompt);
-    if (contextWindow) args.push('--extension', extensionPath);
     this.child = spawn(command.file, args, {
       cwd,
       env: { ...process.env, PI_SKIP_VERSION_CHECK: '1', PICALL_CONTEXT_WINDOW: contextWindow ? String(contextWindow) : '' },
@@ -66,6 +94,14 @@ class RpcWorker extends EventEmitter {
     this.emit('failure', error);
   }
 
+  snapshot() {
+    return { ...this.context, tools: [...this.metadata.activeTools], availableTools: [...this.metadata.availableTools] };
+  }
+
+  assertMetadata() {
+    if (!this.metadataKnown) throw failure('Pi did not report its tool registry. Restart PiCall and check its runtime extension.', 502, 'runtime_metadata_unavailable');
+  }
+
   onData(chunk) {
     this.buffer += chunk;
     let end;
@@ -91,6 +127,19 @@ class RpcWorker extends EventEmitter {
         if (record.success) pending.resolve(record.data);
         else pending.reject(failure(record.error || `${record.command} failed.`, 502, 'pi_command_error'));
       } else if (record.type === 'extension_ui_request') {
+        if (record.method === 'setStatus' && record.statusKey === 'picall_runtime') {
+          try {
+            if (typeof record.statusText !== 'string' || record.statusText.length > 256 * 1024) throw new Error('Invalid runtime status.');
+            const metadata = JSON.parse(record.statusText);
+            if (!Array.isArray(metadata.activeTools) || !Array.isArray(metadata.availableTools)) throw new Error('Invalid runtime status.');
+            this.metadata = { activeTools: toolNames(metadata.activeTools), availableTools: toolNames(metadata.availableTools) };
+            this.metadataKnown = true;
+            this.emit('record', { type: 'picall_runtime', ...this.metadata });
+          } catch {
+            this.logger?.log('warn', 'Pi returned invalid runtime tool metadata.', { code: 'invalid_runtime_metadata' });
+          }
+          continue;
+        }
         // An HTTP agent has no interactive dialog. Explicitly cancel rather than
         // allowing extensions to wait indefinitely for an absent terminal.
         if (['select', 'confirm', 'input', 'editor'].includes(record.method)) {
@@ -161,6 +210,12 @@ export class PiRuntime {
 
   getCommand() { return this.command || bundledCommand(); }
 
+  probeKey(includeModel = false) {
+    const config = this.getConfig();
+    return JSON.stringify({ ...runtimeContext(config.workdir || process.cwd(), this.command), projectTrust: config.projectTrust || 'default',
+      ...(includeModel ? { model: config.model || '', effort: config.effort || 'medium', contextWindow: config.contextWindow ?? null } : {}) });
+  }
+
   enqueueProbe(task) {
     const result = this.probeQueue.then(task, task);
     this.probeQueue = result.then(() => {}, () => {});
@@ -168,39 +223,43 @@ export class PiRuntime {
   }
 
   async check() {
-    const key = this.getConfig().workdir || process.cwd();
-    if (this.checkCache?.key === key && Date.now() - this.checkCache.at < 30_000) return this.checkCache.value;
-    if (this.checkInFlight?.key === key) return this.checkInFlight.promise;
+    const key = this.probeKey(true);
+    if (this.checkCache?.key === key && Date.now() - this.checkCache.at < 30_000) return copySnapshot(this.checkCache.value);
+    if (this.checkInFlight?.key === key) return copySnapshot(await this.checkInFlight.promise);
     const promise = this.enqueueProbe(() => this.performCheck()).then((value) => {
       this.checkCache = { key, at: Date.now(), value };
       return value;
     }).finally(() => { if (this.checkInFlight?.promise === promise) this.checkInFlight = null; });
     this.checkInFlight = { key, promise };
-    return promise;
+    return copySnapshot(await promise);
   }
 
   async performCheck() {
     let worker;
+    let version = null;
+    const context = runtimeContext(this.getConfig().workdir || process.cwd(), this.command);
     try {
       if (this.closed) throw failure('Pi runtime is shutting down.', 503, 'runtime_closed');
       const command = this.getCommand();
-      const version = command.packagePath ? JSON.parse(await readFile(command.packagePath, 'utf8')).version : 'custom';
-      worker = this.createWorker({});
+      version = command.packagePath ? JSON.parse(await readFile(command.packagePath, 'utf8')).version : 'custom';
+      const config = this.getConfig();
+      worker = this.createWorker({ model: config.model || '', effort: config.effort || 'medium', contextWindow: config.contextWindow ?? null });
       this.probeWorkers.add(worker);
       await worker.send({ type: 'get_state' });
-      return { available: true, version, error: null };
+      worker.assertMetadata();
+      return { available: true, version, error: null, ...worker.snapshot() };
     } catch (error) {
-      return { available: false, version: null, error: error.message };
+      return { available: false, version, error: error.message, tools: [], availableTools: [], ...context };
     } finally { await worker?.close(); this.probeWorkers.delete(worker); }
   }
 
   createWorker(options) {
     const config = this.getConfig();
-    return new RpcWorker(this.getCommand(), { cwd: config.workdir || process.cwd(), logger: this.logger, ...options });
+    return new RpcWorker(this.getCommand(), { cwd: config.workdir || process.cwd(), projectTrust: config.projectTrust || 'default', logger: this.logger, ...options });
   }
 
   async models() {
-    const key = this.getConfig().workdir || process.cwd();
+    const key = this.probeKey();
     if (this.modelsCache?.key === key && Date.now() - this.modelsCache.at < 10_000) return this.modelsCache.value.map((model) => ({ ...model }));
     if (this.modelsInFlight?.key === key) return (await this.modelsInFlight.promise).map((model) => ({ ...model }));
     const promise = this.enqueueProbe(() => this.performModels()).then((value) => {
@@ -237,6 +296,7 @@ export class PiRuntime {
       contextWindow: options.contextWindow ?? config.contextWindow ?? null,
       systemPrompt: options.systemPrompt || '',
       workdir: config.workdir || process.cwd(),
+      projectTrust: config.projectTrust || 'default',
     };
     const id = options.sessionId || randomUUID();
     if (this.retiredIds.has(id)) throw failure('This session has expired or was closed. Use a new session ID to start a conversation.', 409, 'session_expired');
@@ -248,7 +308,7 @@ export class PiRuntime {
         throw failure('This Pi session has exited; start a new session.', 409, 'session_expired');
       }
       if (JSON.stringify(existing.settings) !== JSON.stringify(settings)) {
-        throw failure('Model, effort, context window, system prompt, or working directory changed. Start a new session.', 409, 'session_configuration_changed');
+        throw failure('Model, effort, context window, system prompt, working directory, or project trust changed. Start a new session.', 409, 'session_configuration_changed');
       }
       existing.busy = true;
       existing.lastUsedAt = Date.now();
@@ -271,11 +331,17 @@ export class PiRuntime {
       worker: null,
       run: (prompt, runOptions) => this.run(session, prompt, runOptions),
     };
+    Object.defineProperties(session, {
+      tools: { enumerable: true, get: () => session.worker?.snapshot().tools || [] },
+      availableTools: { enumerable: true, get: () => session.worker?.snapshot().availableTools || [] },
+      snapshot: { enumerable: true, get: () => session.worker?.snapshot() || { ...runtimeContext(settings.workdir, this.command), tools: [], availableTools: [] } },
+    });
     this.sessions.set(id, session);
     try {
       session.worker = this.createWorker(settings);
       session.worker.on('failure', () => { this.retire(session); });
       const state = await session.worker.send({ type: 'get_state' });
+      session.worker.assertMetadata();
       if (!state?.model) throw failure('Pi has no available model. Configure a provider with pi /login or its API-key environment variable.', 503, 'model_unavailable');
       session.model = `${state.model.provider}/${state.model.id}`;
       if (settings.model && session.model !== settings.model) throw failure(`Pi selected ${session.model} instead of the requested ${settings.model}. Use a model ID from /v1/models.`, 400, 'model_unavailable');
@@ -294,7 +360,7 @@ export class PiRuntime {
     }
   }
 
-  async run(session, prompt, { signal, onText, onReasoning } = {}) {
+  async run(session, prompt, { signal, onText, onReasoning, onToolEvent } = {}) {
     const worker = session.worker;
     let text = '';
     let lastAssistant;
@@ -349,7 +415,11 @@ export class PiRuntime {
             }
           }
           if (record.type === 'tool_execution_start' || record.type === 'tool_execution_end') {
-            this.logger?.log(record.isError ? 'warn' : 'info', `Pi ${record.type}.`, { sessionId: session.id, tool: record.toolName, isError: record.isError });
+            const tool = toolNames([record.toolName])[0];
+            if (tool) {
+              this.logger?.log(record.isError ? 'warn' : 'info', `Pi ${record.type}.`, { sessionId: session.id, tool, isError: record.isError });
+              onToolEvent?.({ tool, status: record.type === 'tool_execution_start' ? 'running' : record.isError ? 'failed' : 'completed' });
+            }
           }
           if (record.type === 'agent_settled') resolveRun();
         } catch (error) { rejectRun(error); void worker.close(); }
@@ -392,7 +462,7 @@ export class PiRuntime {
   }
 
   list() {
-    return [...this.sessions.values()].map(({ id, model, busy, createdAt, lastUsedAt }) => ({ id, model, busy, createdAt, lastUsedAt }));
+    return [...this.sessions.values()].map(({ id, model, busy, createdAt, lastUsedAt, tools, availableTools }) => ({ id, model, busy, createdAt, lastUsedAt, tools, availableTools }));
   }
 
   retire(session) {
