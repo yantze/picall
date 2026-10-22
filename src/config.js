@@ -9,7 +9,21 @@ export const DEFAULTS = Object.freeze({
   host: '127.0.0.1', port: 8787,
   apiKey: '', workdir: process.cwd(), maxSessions: 8, idleTimeoutMinutes: 30,
   requestTimeoutSeconds: 300, projectTrust: 'default', saveSessions: false, enableSkills: false,
+  toolOverrides: Object.freeze({}), enableExtensions: true, extensionOverrides: Object.freeze({}),
 });
+
+export const canonicalOverrides = (value = {}) => Object.fromEntries(Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
+
+function validateOverrides(value, field, validName, maxBytes) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length > 256 ||
+      Object.entries(value).some(([name, enabled]) => !validName(name) || typeof enabled !== 'boolean') ||
+      Buffer.byteLength(JSON.stringify(value)) > maxBytes) {
+    throw appError(`${field} must be an object with valid names and boolean values (at most 256 entries).`);
+  }
+}
+
+const normalizedConfig = value => ({ ...value,
+  toolOverrides: canonicalOverrides(value.toolOverrides), extensionOverrides: canonicalOverrides(value.extensionOverrides) });
 
 export function appError(message, status = 400, code = 'invalid_request', param = null) {
   return Object.assign(new Error(message), { status, code, param });
@@ -28,6 +42,10 @@ function validate(values) {
   if (!PROJECT_TRUST.includes(values.projectTrust)) throw appError('projectTrust must be default, allow, or deny.');
   if (typeof values.saveSessions !== 'boolean') throw appError('saveSessions must be a boolean.');
   if (typeof values.enableSkills !== 'boolean') throw appError('enableSkills must be a boolean.');
+  if (typeof values.enableExtensions !== 'boolean') throw appError('enableExtensions must be a boolean.');
+  validateOverrides(values.toolOverrides, 'toolOverrides', name => /^[A-Za-z0-9_.:-]{1,256}$/.test(name), 32 * 1024);
+  validateOverrides(values.extensionOverrides, 'extensionOverrides', name => name.length <= 4096 && !/[\u0000-\u001f\u007f]/.test(name) &&
+    (isAbsolute(name) || /^builtin:[A-Za-z0-9_.-]+$/.test(name)), 128 * 1024);
   if (typeof values.apiKey !== 'string' || (values.apiKey && (!/^[\x21-\x7e]{8,256}$/.test(values.apiKey)))) throw appError('API key must contain 8–256 visible ASCII characters (or be empty to disable authentication).');
   if (typeof values.workdir !== 'string' || !isAbsolute(values.workdir)) throw appError('workdir must be an absolute path.');
 }
@@ -50,6 +68,7 @@ export class ConfigStore {
     const { model: _model, effort: _effort, contextWindow: _contextWindow, ...gatewaySettings } = saved;
     this.value = { ...DEFAULTS, ...gatewaySettings, ...this.overrides };
     validate(this.value);
+    this.value = normalizedConfig(this.value);
     return this.value;
   }
   public() {
@@ -59,10 +78,11 @@ export class ConfigStore {
   update(patch) {
     const operation = this.queue.then(async () => {
       if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw appError('Settings must be a JSON object.');
-      const allowed = ['apiKey', 'maxSessions', 'idleTimeoutMinutes', 'requestTimeoutSeconds', 'projectTrust', 'saveSessions', 'enableSkills'];
+      const allowed = ['apiKey', 'maxSessions', 'idleTimeoutMinutes', 'requestTimeoutSeconds', 'projectTrust', 'saveSessions', 'enableSkills', 'toolOverrides', 'enableExtensions', 'extensionOverrides'];
       for (const key of Object.keys(patch)) if (!allowed.includes(key)) throw appError(`Setting is read-only or unknown: ${key}`);
-      const next = { ...this.value, ...patch };
-      validate(next);
+      const merged = { ...this.value, ...patch };
+      validate(merged);
+      const next = normalizedConfig(merged);
       const tmp = `${this.path}.${randomUUID()}.tmp`;
       await writeFile(tmp, JSON.stringify(next, null, 2) + '\n', { mode: 0o600 });
       await rename(tmp, this.path);

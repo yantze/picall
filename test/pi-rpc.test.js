@@ -79,3 +79,29 @@ test('tool failure notifications expose names and states without query arguments
   assert.ok(!exposed.includes('PICALL_PRIVATE_TOOL_QUERY'));
   assert.ok(!exposed.includes('PICALL_PRIVATE_TOOL_RESULT'));
 });
+
+test('shutdown after a worker starts but before adoption leaves no Pi process', async (t) => {
+  const runtime = createRuntime(t);
+  let worker;
+  const createWorker = runtime.createWorker.bind(runtime);
+  runtime.createWorker = async options => {
+    worker = await createWorker(options);
+    await runtime.close();
+    return worker;
+  };
+  await assert.rejects(runtime.acquire({ sessionId: 'shutdown-before-adoption' }), error => error.code === 'session_expired');
+  assert.deepEqual(runtime.list(), []);
+  assert.ok(worker.child.exitCode !== null || worker.child.signalCode !== null, 'the unadopted worker must exit');
+});
+
+test('shutdown during extension discovery prevents a late Pi process from starting', async (t) => {
+  const runtime = createRuntime(t, { extensionOverrides: { 'builtin:mcp': false } });
+  const discovery = Promise.withResolvers();
+  runtime.extensions = () => discovery.promise;
+  const pending = runtime.acquire({ sessionId: 'shutdown-during-discovery' });
+  const rejected = assert.rejects(pending, error => error.code === 'runtime_closed');
+  await runtime.close();
+  discovery.resolve([]);
+  await rejected;
+  assert.deepEqual(runtime.list(), []);
+});

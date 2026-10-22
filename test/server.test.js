@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -62,7 +62,7 @@ test('health, static UI, status and models are served without model traffic', as
   assert.equal(statusResponse.status, 200);
   const status = await statusResponse.json();
   assert.equal(status.pi.available, true);
-  assert.deepEqual(new Set(status.pi.tools), new Set(['read', 'bash']));
+  assert.deepEqual(new Set(status.pi.tools), new Set(['read']));
   assert.deepEqual(new Set(status.pi.availableTools), new Set(['read', 'bash', 'fixture_inactive']));
   assert.equal(typeof status.pi.workdir, 'string');
   assert.equal(typeof status.pi.agentDir, 'string');
@@ -659,7 +659,7 @@ test('Skills changes require fresh sessions and reach Pi without disabling regis
     assert.deepEqual(JSON.parse(result.choices[0].message.content), { enableSkills: expected });
     const id = response.headers.get('x-session-id');
     const { sessions } = await (await request('/api/sessions')).json();
-    assert.deepEqual(new Set(sessions.find(session => session.id === id).tools), new Set(['read', 'bash']));
+    assert.deepEqual(new Set(sessions.find(session => session.id === id).tools), new Set(['read']));
     return id;
   };
   let id = await openSession(false);
@@ -671,4 +671,140 @@ test('Skills changes require fresh sessions and reach Pi without disabling regis
     assert.equal((await previous.json()).error.code, 'session_configuration_changed');
     id = await openSession(enableSkills);
   }
+});
+
+test('Capabilities settings upgrade old configuration and validate updates atomically', async (t) => {
+  const apiKey = 'sk-capabilities-config-test';
+  const { request, configStore, dataDir } = await setup(t, { apiKey, enableSkills: true, saveSessions: true });
+  const legacy = JSON.parse(await readFile(configStore.path, 'utf8'));
+  for (const key of ['toolOverrides', 'enableExtensions', 'extensionOverrides']) delete legacy[key];
+  await writeFile(configStore.path, JSON.stringify(legacy), { mode: 0o600 });
+  await configStore.load();
+  const defaults = await (await request('/api/config')).json();
+  assert.deepEqual(defaults.toolOverrides, {});
+  assert.equal(defaults.enableExtensions, true);
+  assert.deepEqual(defaults.extensionOverrides, {});
+  const values = { toolOverrides: { bash: true, read: false }, enableExtensions: false,
+    extensionOverrides: { [join(dataDir, 'fixture.mjs')]: false, 'builtin:fixture': true } };
+  const response = await request('/api/config', { method: 'PUT', body: values });
+  assert.equal(response.status, 200);
+  const config = await response.json();
+  for (const key of Object.keys(values)) assert.deepEqual(config[key], values[key]);
+  assert.equal(config.apiKeyConfigured, true);
+  assert.equal(Object.hasOwn(config, 'apiKey'), false);
+  const reloaded = new ConfigStore({ dataDir, overrides: { workdir: dataDir } });
+  await reloaded.load();
+  assert.deepEqual(reloaded.value, { ...legacy, ...values });
+
+  const tooManyTools = Object.fromEntries(Array.from({ length: 257 }, (_, index) => [`tool_${index}`, true]));
+  const tooManyExtensions = Object.fromEntries(Array.from({ length: 257 }, (_, index) => [`builtin:fixture_${index}`, true]));
+  const before = await readFile(configStore.path, 'utf8');
+  for (const patch of [
+    { enableExtensions: 'false' }, { enableExtensions: 0 }, { enableExtensions: null },
+    { toolOverrides: null }, { toolOverrides: [] }, { toolOverrides: 'bash' },
+    { toolOverrides: { bash: 'true' } }, { toolOverrides: { '*': false } },
+    { toolOverrides: { 'bash,read': true } }, { toolOverrides: tooManyTools },
+    { extensionOverrides: null }, { extensionOverrides: [] }, { extensionOverrides: 'fixture' },
+    { extensionOverrides: { 'builtin:fixture': 1 } }, { extensionOverrides: { 'relative/fixture.mjs': false } },
+    { extensionOverrides: { 'builtin:bad/name': false } }, { extensionOverrides: tooManyExtensions },
+  ]) {
+    const invalid = await request('/api/config', { method: 'PUT', body: patch });
+    assert.equal(invalid.status, 400, JSON.stringify(patch));
+    await invalid.json();
+    assert.equal(await readFile(configStore.path, 'utf8'), before);
+    assert.deepEqual(configStore.value, reloaded.value);
+  }
+});
+
+test('Capabilities report disabled bash and refresh tool policy after saving overrides', async (t) => {
+  const { request } = await setup(t);
+  const initialResponse = await request('/api/capabilities');
+  assert.equal(initialResponse.status, 200);
+  const initial = await initialResponse.json();
+  assert.ok(Array.isArray(initial.extensions));
+  const bash = initial.tools.find(tool => tool.name === 'bash');
+  assert.equal(bash.enabled, false);
+  assert.equal(bash.active, false);
+  assert.equal(bash.defaultEnabled, false);
+  assert.equal(typeof bash.description, 'string');
+  assert.equal(typeof bash.reason, 'string');
+  const read = initial.tools.find(tool => tool.name === 'read');
+  assert.equal(read.enabled, true);
+  assert.equal(read.active, true);
+  assert.equal(read.defaultEnabled, true);
+  assert.ok(initial.tools.some(tool => tool.name === 'fixture_inactive'));
+
+  assert.equal((await request('/api/config', { method: 'PUT', body: { toolOverrides: { bash: true, read: false } } })).status, 200);
+  const updated = await (await request('/api/capabilities')).json();
+  assert.equal(updated.tools.find(tool => tool.name === 'bash').enabled, true);
+  assert.equal(updated.tools.find(tool => tool.name === 'bash').active, true);
+  assert.equal(updated.tools.find(tool => tool.name === 'read').enabled, false);
+  assert.equal(updated.tools.find(tool => tool.name === 'read').active, false);
+  const { pi } = await (await request('/api/status')).json();
+  assert.deepEqual(new Set(pi.tools), new Set(['bash']));
+  assert.ok(pi.availableTools.includes('read'));
+});
+
+test('Capabilities discover project extensions without importing them and reflect individual and master switches', async (t) => {
+  const { request, dataDir } = await setup(t, { projectTrust: 'allow' });
+  const extensionDir = join(dataDir, '.pi', 'extensions');
+  await mkdir(extensionDir, { recursive: true });
+  const path = join(extensionDir, 'catalog-fixture.js');
+  const canary = join(dataDir, 'extension-import-canary.txt');
+  await writeFile(path, `import { writeFileSync } from 'node:fs';
+writeFileSync(${JSON.stringify(canary)}, 'executed');
+export default function () {}
+`);
+  const getExtension = async () => {
+    const response = await request('/api/capabilities');
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    const extension = result.extensions.find(extension => extension.path === path);
+    assert.ok(extension, 'Project extension should appear in the catalogue');
+    assert.equal(extension.id, path);
+    assert.equal(extension.scope, 'project');
+    await assert.rejects(readFile(canary), { code: 'ENOENT' });
+    return extension;
+  };
+  const initial = await getExtension();
+  assert.equal(initial.configuredEnabled, true);
+  assert.equal(initial.enabled, true);
+  assert.equal((await request('/api/config', { method: 'PUT', body: { extensionOverrides: { [path]: false } } })).status, 200);
+  const individual = await getExtension();
+  assert.equal(individual.configuredEnabled, true);
+  assert.equal(individual.enabled, false);
+  assert.equal((await request('/api/config', { method: 'PUT', body: { extensionOverrides: { [path]: true }, enableExtensions: false } })).status, 200);
+  const master = await getExtension();
+  assert.equal(master.configuredEnabled, true);
+  assert.equal(master.enabled, false);
+});
+
+test('Capabilities changes require fresh sessions while equivalent map order preserves a conversation', async (t) => {
+  const { request } = await setup(t);
+  const openSession = async () => {
+    const response = await request('/v1/chat/completions', { method: 'POST', body: completion() });
+    assert.equal(response.status, 200);
+    await response.json();
+    return response.headers.get('x-session-id');
+  };
+  const continueSession = (id) => request('/v1/chat/completions', { method: 'POST',
+    headers: { 'x-session-id': id }, body: completion('Next turn') });
+  let id = await openSession();
+  for (const patch of [
+    { toolOverrides: { bash: true, read: false } },
+    { enableExtensions: false },
+    { extensionOverrides: { 'builtin:fixture-a': false, 'builtin:fixture-b': true } },
+  ]) {
+    assert.equal((await request('/api/config', { method: 'PUT', body: patch })).status, 200);
+    const previous = await continueSession(id);
+    assert.equal(previous.status, 409);
+    assert.equal((await previous.json()).error.code, 'session_configuration_changed');
+    id = await openSession();
+  }
+  const reordered = { toolOverrides: { read: false, bash: true },
+    extensionOverrides: { 'builtin:fixture-b': true, 'builtin:fixture-a': false } };
+  assert.equal((await request('/api/config', { method: 'PUT', body: reordered })).status, 200);
+  const continued = await continueSession(id);
+  assert.equal(continued.status, 200);
+  assert.equal((await continued.json()).choices[0].message.content, 'Hello from Pi (turn 2)');
 });

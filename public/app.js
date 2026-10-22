@@ -1,7 +1,21 @@
 'use strict';
 
 const $ = (id) => document.getElementById(id);
-const state = { config: null, status: null, models: [], logs: [], seenLogs: new Set(), paused: false, sessionId: null, controller: null, eventSource: null, toastTimer: null, logFloor: 0, latestLogTime: '', logConnected: false, toolRun: null };
+const state = { config: null, status: null, models: [], logs: [], seenLogs: new Set(), paused: false, sessionId: null, controller: null, eventSource: null, toastTimer: null, logFloor: 0, latestLogTime: '', logConnected: false, toolRun: null,
+  capabilityTools: null, capabilityExtensions: null, capabilityError: '', capabilityRequest: 0,
+  toolOverrides: Object.create(null), extensionOverrides: Object.create(null) };
+
+function cloneOverrides(value) {
+  const result = Object.create(null);
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    for (const [name, enabled] of Object.entries(value)) if (typeof enabled === 'boolean') result[name] = enabled;
+  }
+  return result;
+}
+
+function overrideValue(overrides, name, fallback) {
+  return Object.hasOwn(overrides, name) ? overrides[name] : fallback === true;
+}
 
 async function api(path, options = {}) {
   const response = await fetch(path, { ...options, headers: { 'Content-Type': 'application/json', ...options.headers } });
@@ -61,6 +75,10 @@ function applyConfig(config) {
   $('idle-timeout').value = config.idleTimeoutMinutes ?? 30;
   $('save-sessions').checked = config.saveSessions === true;
   $('enable-skills').checked = config.enableSkills === true;
+  $('enable-extensions').checked = config.enableExtensions !== false;
+  state.toolOverrides = cloneOverrides(config.toolOverrides);
+  state.extensionOverrides = cloneOverrides(config.extensionOverrides);
+  renderCapabilities();
   $('workdir').value = config.workdir || '';
   $('project-trust').value = config.projectTrust || 'default';
   updateProjectTrustHelp();
@@ -107,6 +125,103 @@ function updateProjectTrustHelp() {
     deny: '忽略当前工作目录的项目资源，不加载其中的扩展与 MCP；用户级配置仍由 Pi 管理。',
   }[value];
   $('project-trust-help').classList.toggle('trust-allow', value === 'allow');
+}
+
+async function loadCapabilities(userTriggered = false) {
+  const request = ++state.capabilityRequest;
+  $('refresh-capabilities').disabled = true;
+  try {
+    const result = await api('/api/capabilities');
+    if (request !== state.capabilityRequest) return;
+    state.capabilityError = typeof result.error === 'string' ? result.error : '';
+    // Runtime startup can fail while extension discovery still succeeds. Keep
+    // the last tool snapshot and every draft override in that case.
+    if (Array.isArray(result.tools) && (!state.capabilityError || result.tools.length)) state.capabilityTools = result.tools;
+    if (Array.isArray(result.extensions)) state.capabilityExtensions = result.extensions;
+    renderCapabilities();
+    if (userTriggered) toast(state.capabilityError || '工具与扩展清单已刷新；待保存的选择已保留。', !!state.capabilityError);
+  } catch (error) {
+    if (request !== state.capabilityRequest) return;
+    state.capabilityError = error.message;
+    renderCapabilities();
+    if (userTriggered) toast(error.message, true);
+  } finally {
+    if (request === state.capabilityRequest) $('refresh-capabilities').disabled = false;
+  }
+}
+
+function capabilityEmpty(message) {
+  const element = document.createElement('p');
+  element.className = 'capability-empty';
+  element.textContent = message;
+  return element;
+}
+
+function renderCapabilities() {
+  $('capability-error').hidden = !state.capabilityError;
+  $('capability-error').textContent = state.capabilityError
+    ? `${state.capabilityError} 已保存及待保存的选择仍保留；已有清单可能来自上次探测。` : '';
+  $('capability-tool-count').textContent = state.capabilityTools ? String(state.capabilityTools.length) : '—';
+  $('capability-extension-count').textContent = state.capabilityExtensions ? String(state.capabilityExtensions.length) : '—';
+  $('extension-master-note').hidden = $('enable-extensions').checked;
+  const tools = document.createDocumentFragment();
+  for (const [index, tool] of (state.capabilityTools || []).entries()) {
+    if (!tool || typeof tool.name !== 'string') continue;
+    const hidden = tool.exposure === 'hidden';
+    const row = document.createElement('div');
+    row.className = `capability-row${hidden ? ' capability-hidden' : ''}`;
+    const input = document.createElement('input');
+    input.type = 'checkbox'; input.id = `cap-tool-${index}`; input.dataset.toolName = tool.name;
+    input.checked = !hidden && overrideValue(state.toolOverrides, tool.name, tool.enabled);
+    input.disabled = hidden;
+    input.setAttribute('aria-label', `允许工具 ${tool.name}`);
+    input.addEventListener('change', () => { state.toolOverrides[tool.name] = input.checked; });
+    const body = document.createElement('div'); body.className = 'capability-body';
+    const heading = document.createElement('div'); heading.className = 'capability-entry-heading';
+    const label = document.createElement('label'); label.htmlFor = input.id;
+    const name = document.createElement('code'); name.textContent = tool.name; label.append(name);
+    const badge = document.createElement('span'); badge.className = 'capability-badge';
+    badge.textContent = hidden ? 'hidden · 无法启用' : tool.active ? '模型直出' : '未直出';
+    heading.append(label, badge);
+    const description = document.createElement('p'); description.className = 'capability-description';
+    description.textContent = typeof tool.description === 'string' && tool.description ? tool.description : '未提供工具说明';
+    const metadata = document.createElement('p'); metadata.className = 'capability-metadata';
+    metadata.textContent = `默认${tool.defaultEnabled ? '允许' : '关闭'}${tool.exposure ? ` · exposure: ${tool.exposure}` : ''}`;
+    body.append(heading, description, metadata);
+    if (hidden || tool.reason) {
+      const reason = document.createElement('p'); reason.className = 'capability-reason';
+      reason.textContent = typeof tool.reason === 'string' && tool.reason ? tool.reason : 'Pi 将此工具标记为 hidden，不能通过此开关启用。';
+      body.append(reason);
+    }
+    row.append(input, body); tools.append(row);
+  }
+  if (!tools.childNodes.length) tools.append(capabilityEmpty(state.capabilityError ? '工具信息暂不可用，已保存的工具选择仍保留。' : state.capabilityTools ? '本次探测没有返回工具。' : '正在读取工具清单…'));
+  $('capability-tool-list').replaceChildren(tools);
+  const extensions = document.createDocumentFragment();
+  for (const [index, extension] of (state.capabilityExtensions || []).entries()) {
+    if (!extension || typeof extension.id !== 'string') continue;
+    const row = document.createElement('div'); row.className = 'capability-row';
+    const input = document.createElement('input'); input.type = 'checkbox';
+    input.id = `cap-extension-${index}`; input.dataset.extensionId = extension.id;
+    input.checked = overrideValue(state.extensionOverrides, extension.id, extension.configuredEnabled);
+    input.setAttribute('aria-label', `加载扩展 ${extension.name || extension.id}`);
+    input.addEventListener('change', () => { state.extensionOverrides[extension.id] = input.checked; });
+    const body = document.createElement('div'); body.className = 'capability-body';
+    const heading = document.createElement('div'); heading.className = 'capability-entry-heading';
+    const label = document.createElement('label'); label.htmlFor = input.id;
+    const name = document.createElement('code'); name.textContent = extension.name || extension.id; label.append(name);
+    const badge = document.createElement('span'); badge.className = 'capability-badge';
+    badge.textContent = `Pi 原配置：${extension.configuredEnabled ? '启用' : '关闭'}`;
+    heading.append(label, badge);
+    const path = document.createElement('p'); path.className = 'capability-path';
+    path.textContent = typeof extension.path === 'string' ? extension.path : extension.id;
+    const metadata = document.createElement('p'); metadata.className = 'capability-metadata';
+    const origin = [extension.scope, extension.origin].filter((value) => typeof value === 'string' && value).join(' · ');
+    metadata.textContent = `${origin ? `${origin} · ` : ''}探测策略：${extension.enabled ? '启用' : '关闭'}`;
+    body.append(heading, path, metadata); row.append(input, body); extensions.append(row);
+  }
+  if (!extensions.childNodes.length) extensions.append(capabilityEmpty(state.capabilityExtensions ? '未发现可管理的扩展。' : state.capabilityError ? '扩展信息暂不可用，已保存的扩展选择仍保留。' : '正在读取扩展清单…'));
+  $('capability-extension-list').replaceChildren(extensions);
 }
 
 function renderRuntimeDiagnostics(pi = {}) {
@@ -279,6 +394,7 @@ function updateRequestModel() {
 
 async function saveConfig(event) {
   event.preventDefault();
+  if (!state.config) { toast('配置尚未读取，无法安全保存。请刷新页面后重试。', true); return; }
   if (state.controller) { toast('请等待本轮完成或停止后，再保存设置。', true); return; }
   $('save-button').disabled = true;
   const patch = {
@@ -286,6 +402,9 @@ async function saveConfig(event) {
     idleTimeoutMinutes: Number($('idle-timeout').value),
     saveSessions: $('save-sessions').checked,
     enableSkills: $('enable-skills').checked,
+    enableExtensions: $('enable-extensions').checked,
+    toolOverrides: cloneOverrides(state.toolOverrides),
+    extensionOverrides: cloneOverrides(state.extensionOverrides),
     projectTrust: $('project-trust').value,
   };
   if ($('disable-key').checked) patch.apiKey = '';
@@ -299,7 +418,7 @@ async function saveConfig(event) {
     applyConfig(config);
     $('save-state').replaceChildren(dot('green'), document.createTextNode('已保存到本机'));
     toast('设置已保存，新会话将使用新配置。');
-    await loadStatus();
+    await Promise.all([loadStatus(), loadCapabilities()]);
   } catch (error) {
     toast(error.message, true);
   } finally {
@@ -564,6 +683,8 @@ $('reload-models').addEventListener('click', () => loadModels(true));
 $('model').addEventListener('change', () => { state.sessionId = null; updateRequestModel(); });
 $('effort').addEventListener('change', () => { state.sessionId = null; updateCurl(); });
 $('project-trust').addEventListener('change', updateProjectTrustHelp);
+$('refresh-capabilities').addEventListener('click', () => loadCapabilities(true));
+$('enable-extensions').addEventListener('change', () => { $('extension-master-note').hidden = $('enable-extensions').checked; });
 $('refresh-tools').addEventListener('click', async () => {
   $('refresh-tools').disabled = true;
   try { await loadStatus(); } finally { $('refresh-tools').disabled = false; }
@@ -624,7 +745,7 @@ async function init() {
   showView(new URL(location.href).searchParams.get('tab') === 'logs' ? 'logs' : 'overview', false);
   $('endpoint').textContent = baseUrl();
   try { applyConfig(await api('/api/config')); } catch (error) { toast(`无法加载配置：${error.message}`, true); }
-  await Promise.all([refresh(), loadModels(), connectLogs()]);
+  await Promise.all([refresh(), loadModels(), loadCapabilities(), connectLogs()]);
   setInterval(() => { if (!document.hidden) void refresh(); }, 5000);
 }
 

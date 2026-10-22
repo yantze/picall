@@ -56,7 +56,7 @@ test('bundled Pi applies request effort, retains model context and executes a co
     process.env.PI_CODING_AGENT_DIR = profile;
     const events = [];
     runtime = new PiRuntime({
-      getConfig: () => ({ workdir: tmpdir(), requestTimeoutSeconds: 30 }),
+      getConfig: () => ({ workdir: tmpdir(), requestTimeoutSeconds: 30, toolOverrides: { bash: true } }),
       logger: { log: (_level, message, details) => events.push({ message, details }) },
     });
     assert.equal((await runtime.check()).available, true);
@@ -131,7 +131,9 @@ test('project tools are only loaded after explicit trust and diagnostics follow 
       assert.equal(diagnostic.workdir, workdir);
       assert.equal(diagnostic.agentDir, profile);
       assert.equal(typeof diagnostic.offlineStartup, 'boolean');
-      assert.ok(diagnostic.tools.includes('bash'));
+      assert.ok(!diagnostic.tools.includes('bash'));
+      assert.ok(!diagnostic.tools.includes('write'));
+      assert.ok(!diagnostic.tools.includes('edit'));
       assert.ok(diagnostic.availableTools.includes('bash'));
       assert.equal(diagnostic.tools.includes('web_probe'), projectTrust === 'allow', `${projectTrust}: active tools`);
       assert.equal(diagnostic.availableTools.includes('web_probe'), projectTrust === 'allow', `${projectTrust}: available tools`);
@@ -211,7 +213,7 @@ test('native Pi history is opt-in, survives shutdown and records multiple turns 
         reasoning: false, input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }],
     } } }), { mode: 0o600 });
     process.env.PI_CODING_AGENT_DIR = profile;
-    const config = { workdir, projectTrust: 'deny', requestTimeoutSeconds: 20 };
+    const config = { workdir, projectTrust: 'deny', requestTimeoutSeconds: 20, toolOverrides: { bash: true } };
     const selection = { model: 'picall-test/session-test', effort: 'off' };
     runtime = new PiRuntime({ getConfig: () => config });
     const transient = await runtime.acquire({ sessionId: 'transient', ...selection });

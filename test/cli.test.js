@@ -178,3 +178,25 @@ test('CLI Skills help documents enabling and disabling Skills', async () => {
   assert.match(stdout, /--enable-skills\b/);
   assert.match(stdout, /--no-skills\b/);
 });
+
+for (const { saved, flags, expected } of [
+  { saved: false, flags: [], expected: false },
+  { saved: false, flags: ['--enable-extensions'], expected: true },
+  { saved: true, flags: ['--no-extensions'], expected: false },
+  { saved: true, flags: ['--enable-extensions', '--no-extensions'], expected: false },
+  { saved: false, flags: ['--no-extensions', '--enable-extensions'], expected: true },
+]) {
+  test(`CLI Extensions ${flags.join(' ') || '(saved setting)'} overrides saved ${saved}`, { timeout: 30_000 }, async (t) => {
+    const { get } = await startCli(t, { savedConfig: { enableExtensions: saved, enableSkills: true }, flags: () => flags });
+    const config = await get('/api/config');
+    assert.equal(config.enableExtensions, expected);
+    assert.equal(config.enableSkills, true);
+  });
+}
+
+test('CLI Extensions help documents enabling and disabling extensions', async () => {
+  const { stdout, stderr } = await execFileAsync(process.execPath, [cli, '--help']);
+  assert.equal(stderr, '');
+  assert.match(stdout, /--enable-extensions\b/);
+  assert.match(stdout, /--no-extensions\b/);
+});

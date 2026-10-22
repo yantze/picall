@@ -15,6 +15,7 @@
 - 一个会话一个 Pi 子进程，支持 `X-Session-Id` 保留工具调用和多轮上下文。
 - 可选保存 Pi 原生会话，记录请求、回复和工具结果，在 Pi CLI 中查看或继续。
 - 使用 Pi 原生模型认证、MCP、extensions 和 Pi packages；Skills 默认关闭，可在页面开启。
+- 网页逐项控制工具和扩展；默认关闭写入与命令执行工具，扩展默认遵循 Pi 的启用配置。
 
 ## 安装与启动
 
@@ -32,7 +33,7 @@ picall --workdir /absolute/path/to/your/project
 ```bash
 npm ci
 npm start -- --workdir /absolute/path/to/your/project
-# 或 npm pack 后 npm install -g ./yantze-picall-0.4.0.tgz
+# 或 npm pack 后 npm install -g ./yantze-picall-0.5.0.tgz
 ```
 
 启动后打开终端输出的本地管理地址，默认端口 **8787**。管理页保存 API key、会话和项目设置；Pi 模型目录只读展示能力。试运行页作为一个客户端，选择仅用于本次请求的模型和推理强度，不保存为服务默认值。日志入口可在新标签页中打开。
@@ -149,7 +150,7 @@ picall --workdir /path/to/project --save-sessions
 
 ### 兼容范围
 
-支持文本 `system`、`developer`、`user`、`assistant` 消息、文本 content 数组、`stream`、`stream_options.include_usage`、`n=1`、`reasoning_effort`。system/developer 内容追加到 Pi 自带的 agent system prompt；Pi 的工具和执行能力仍然启用。返回的文本包含本轮 agent 的各次助手文本，工具循环结束后才发出流终止标记。用量累加本轮全部模型调用（包含缓存输入 tokens）。
+支持文本 `system`、`developer`、`user`、`assistant` 消息、文本 content 数组、`stream`、`stream_options.include_usage`、`n=1`、`reasoning_effort`。system/developer 内容追加到 Pi 自带的 agent system prompt；Pi 继续管理工具循环，具体工具由页面策略决定。返回的文本包含本轮 agent 的各次助手文本，工具循环结束后才发出流终止标记。用量累加本轮全部模型调用（包含缓存输入 tokens）。
 
 请求字段 `reasoning_effort` 可选，接受 Pi 公开的 `off / minimal / low / medium / high / xhigh / max`，以模型返回的 `supported_reasoning_efforts` 为准。OpenAI 的 `none` 映射为 Pi 的 `off`。新会话省略或传 null 时，不向 Pi 传入 thinking 参数，使用 Pi 自身的默认值；不会强加 medium。非推理模型通常只支持 off，不支持的级别返回 400。
 
@@ -185,7 +186,20 @@ picall --workdir /path/to/project --save-sessions
 - Skills / extensions：使用 Pi 支持的目录和 `settings.json` 配置。
 - Pi packages：`picall pi install <package>`，随后创建新 PiCall 会话加载。
 
-管理页提供服务设置、只读模型目录、试运行及会话管理；MCP 和 packages 的安装配置使用 Pi CLI/配置文件。模型、推理强度由真实客户端逐请求指定。
+管理页提供服务设置、工具及扩展开关、只读模型目录、试运行及会话管理；MCP 和 packages 的安装配置使用 Pi CLI/配置文件。模型、推理强度由真实客户端逐请求指定。
+
+### 工具与 Extensions 开关
+
+在服务设置中展开“工具与扩展”，可以逐项允许或关闭工具，并单独选择要加载的扩展。保存后新会话生效；复用旧 `X-Session-Id` 会返回 `409 session_configuration_changed`，管理页会自动开始新会话。
+
+- **默认关闭写入和命令执行工具**，包括 `write`、`edit`、`bash`、`powershell`、`codemode`，以及名称明确表示修改数据、执行命令，或 annotations 声明会修改数据的工具。普通读取、搜索及未分类扩展工具默认允许；页面显示每项的默认状态和判断原因，可手动覆盖。关闭项的模型声明会被过滤，实际调用也会被拦截，包括组合工具发起的嵌套调用。工具的“允许调用”和“模型直出”分别显示，保留 Pi 原生 deferred/codemode/hidden 行为。
+- **Extensions 默认开启**，遵循 Pi 原来已启用的扩展；可通过总开关关闭全部扩展，也可按路径或 `builtin:` 名称单独开关。单项关闭会在模块加载前排除该扩展。PiCall 用于工具策略和诊断的内部 runtime 始终保留；关闭扩展总开关也会关闭 MCP、codemode 等 Pi 内置扩展。扩展清单的路径发现不会导入模块或安装缺失包；工具清单探测会启动配置允许的扩展。
+
+配置字段为 `toolOverrides: {"bash": true, "write": false}`、`enableExtensions: true` 和 `extensionOverrides: {"/absolute/path/extension.js": false, "builtin:codemode": true}`。没有覆盖项时使用默认策略；刷新失败或清单暂时缺少某项时，页面会保留已保存及待保存的覆盖设置。`GET /api/capabilities` 返回实际工具状态和可管理扩展清单。
+
+启动参数 `--no-extensions` / `--enable-extensions` 可以覆盖保存的扩展总开关。逐项选择会按明确的项目信任、已保存的信任或全局默认值决定是否加载项目扩展；不会在路径发现时运行自定义 `project_trust` 钩子。使用 `--workdir` 可明确允许该项目的扩展参与选择。
+
+工具开关约束 Pi 工具调用；允许的扩展本身仍以启动用户权限执行。这不是操作系统级只读沙箱。
 
 ### Skills 加载开关
 
@@ -204,7 +218,7 @@ picall --workdir /path/to/project --no-skills
 
 模型的自述不能代替实际工具诊断。试运行旁会展示 Pi 进程实际加载的工具名称、工作目录和配置目录；执行过程中会展示本轮工具名称和状态，不显示工具参数或输出正文。
 
-Pi 默认的 `read / bash / edit / write` 不含独立网页搜索、浏览工具。`bash` 可以使用本机的 curl 等程序发起 HTTP 请求；专门的搜索、网页抓取能力通常来自你配置的 MCP 或扩展。PiCall 不额外安装搜索服务，也不限制子进程联网；实际访问仍取决于本机网络、工具和凭据。
+Pi 默认的 `read / bash / edit / write` 不含独立网页搜索、浏览工具。PiCall 默认关闭 `bash` 等命令工具；需要使用本机 curl 等程序联网时，先在页面中允许 `bash` 并新建会话。专门的搜索、网页抓取能力通常来自你配置的 MCP 或扩展。PiCall 不额外安装搜索服务；实际访问仍取决于本机网络、允许的工具和凭据。
 
 PiCall 使用内置 Pi，而终端的 `pi` 也可能是其他版本、别名或携带额外 `-e` 参数的包装脚本。请对比 `pi --version` 与 `picall pi --version`，并使用相同工作目录和 `PI_CODING_AGENT_DIR`。已有 PiCall 会话不会自动重载新安装的工具，配置变化后请点击“新会话”。
 

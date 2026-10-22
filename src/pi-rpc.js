@@ -6,6 +6,9 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { getSupportedThinkingLevels } from '@earendil-works/pi-ai/compat';
+import { canonicalOverrides } from './config.js';
+import { discoverExtensions } from './extension-catalog.js';
+import { toolPolicy } from './tool-policy.js';
 
 const extensionPath = fileURLToPath(new URL('./extensions/runtime.mjs', import.meta.url));
 const MAX_RECORD_BYTES = 16 * 1024 * 1024;
@@ -31,7 +34,7 @@ function runtimeContext(workdir, command) {
 }
 
 function copySnapshot(value) {
-  return { ...value, tools: [...value.tools], availableTools: [...value.availableTools] };
+  return { ...value, tools: [...value.tools], availableTools: [...value.availableTools], toolDetails: (value.toolDetails || []).map(tool => ({ ...tool })) };
 }
 
 function copyModel(value) {
@@ -49,7 +52,7 @@ function bundledCommand() {
 }
 
 class RpcWorker extends EventEmitter {
-  constructor(command, { cwd, model, effort, systemPrompt, projectTrust, saveSessions = false, enableSkills = false, logger }) {
+  constructor(command, { cwd, model, effort, systemPrompt, projectTrust, saveSessions = false, enableSkills = false, toolOverrides = {}, selectedExtensions, logger }) {
     super();
     this.pending = new Map();
     this.sequence = 0;
@@ -57,9 +60,13 @@ class RpcWorker extends EventEmitter {
     this.buffer = '';
     this.stderr = '';
     this.context = runtimeContext(cwd, command);
-    this.metadata = { activeTools: [], availableTools: [] };
+    this.metadata = { activeTools: [], availableTools: [], toolDetails: [] };
     this.metadataKnown = false;
     const args = [...command.args, '--mode', 'rpc', '--extension', extensionPath];
+    if (selectedExtensions !== undefined) {
+      args.push('--no-extensions');
+      for (const path of selectedExtensions) args.push('--extension', path);
+    }
     if (!saveSessions) args.push('--no-session');
     if (!enableSkills) args.push('--no-skills');
     if (projectTrust === 'allow') args.push('--approve');
@@ -69,7 +76,7 @@ class RpcWorker extends EventEmitter {
     if (systemPrompt) args.push('--append-system-prompt', systemPrompt);
     this.child = spawn(command.file, args, {
       cwd,
-      env: { ...process.env, PI_SKIP_VERSION_CHECK: '1' },
+      env: { ...process.env, PI_SKIP_VERSION_CHECK: '1', PICALL_TOOL_OVERRIDES: JSON.stringify(toolOverrides) },
       stdio: ['pipe', 'pipe', 'pipe'],
       detached: process.platform !== 'win32',
       windowsHide: true,
@@ -102,7 +109,7 @@ class RpcWorker extends EventEmitter {
   }
 
   snapshot() {
-    return { ...this.context, tools: [...this.metadata.activeTools], availableTools: [...this.metadata.availableTools] };
+    return { ...this.context, tools: [...this.metadata.activeTools], availableTools: [...this.metadata.availableTools], toolDetails: this.metadata.toolDetails.map(tool => ({ ...tool })) };
   }
 
   assertMetadata() {
@@ -136,10 +143,19 @@ class RpcWorker extends EventEmitter {
       } else if (record.type === 'extension_ui_request') {
         if (record.method === 'setStatus' && record.statusKey === 'picall_runtime') {
           try {
-            if (typeof record.statusText !== 'string' || record.statusText.length > 256 * 1024) throw new Error('Invalid runtime status.');
+            if (typeof record.statusText !== 'string' || record.statusText.length > 2 * 1024 * 1024) throw new Error('Invalid runtime status.');
             const metadata = JSON.parse(record.statusText);
             if (!Array.isArray(metadata.activeTools) || !Array.isArray(metadata.availableTools)) throw new Error('Invalid runtime status.');
-            this.metadata = { activeTools: toolNames(metadata.activeTools), availableTools: toolNames(metadata.availableTools) };
+            const activeTools = toolNames(metadata.activeTools);
+            const availableTools = toolNames(metadata.availableTools);
+            const knownNames = new Set(availableTools);
+            const toolDetails = (Array.isArray(metadata.toolDetails) ? metadata.toolDetails : []).filter(tool => tool && knownNames.has(tool.name)).slice(0, MAX_TOOLS).map(tool => ({
+              name: tool.name, description: typeof tool.description === 'string' ? tool.description.slice(0, 512) : '',
+              enabled: tool.enabled === true, active: activeTools.includes(tool.name),
+              exposure: ['direct', 'model-only', 'codemode', 'deferred', 'hidden'].includes(tool.exposure) ? tool.exposure : 'direct',
+              defaultEnabled: tool.defaultEnabled === true, reason: typeof tool.reason === 'string' ? tool.reason.slice(0, 256) : '',
+            }));
+            this.metadata = { activeTools, availableTools, toolDetails };
             this.metadataKnown = true;
             this.emit('record', { type: 'picall_runtime', ...this.metadata });
           } catch {
@@ -209,6 +225,7 @@ export class PiRuntime {
     this.sessions = new Map();
     this.retiredIds = new Map();
     this.probeWorkers = new Set();
+    this.workers = new Set();
     this.probeQueue = Promise.resolve();
     this.closed = false;
     this.housekeeping = setInterval(() => { void this.reap(); }, 60_000);
@@ -219,7 +236,8 @@ export class PiRuntime {
 
   probeKey() {
     const config = this.getConfig();
-    return JSON.stringify({ ...runtimeContext(config.workdir || process.cwd(), this.command), projectTrust: config.projectTrust || 'default', enableSkills: config.enableSkills === true });
+    return JSON.stringify({ ...runtimeContext(config.workdir || process.cwd(), this.command), projectTrust: config.projectTrust || 'default', enableSkills: config.enableSkills === true,
+      toolOverrides: canonicalOverrides(config.toolOverrides || {}), enableExtensions: config.enableExtensions !== false, extensionOverrides: canonicalOverrides(config.extensionOverrides || {}) });
   }
 
   enqueueProbe(task) {
@@ -248,7 +266,7 @@ export class PiRuntime {
       if (this.closed) throw failure('Pi runtime is shutting down.', 503, 'runtime_closed');
       const command = this.getCommand();
       version = command.packagePath ? JSON.parse(await readFile(command.packagePath, 'utf8')).version : 'custom';
-      worker = this.createWorker({ saveSessions: false });
+      worker = await this.createWorker({ saveSessions: false });
       this.probeWorkers.add(worker);
       await worker.send({ type: 'get_state' });
       worker.assertMetadata();
@@ -258,9 +276,37 @@ export class PiRuntime {
     } finally { await worker?.close(); this.probeWorkers.delete(worker); }
   }
 
-  createWorker(options) {
+  async createWorker(options) {
     const config = this.getConfig();
-    return new RpcWorker(this.getCommand(), { cwd: config.workdir || process.cwd(), projectTrust: config.projectTrust || 'default', enableSkills: config.enableSkills === true, logger: this.logger, ...options });
+    const settings = { ...config, ...options };
+    let selectedExtensions;
+    if (settings.enableExtensions === false) selectedExtensions = [];
+    else if (Object.keys(settings.extensionOverrides || {}).length) {
+      selectedExtensions = (await this.extensions(settings)).filter(extension => extension.enabled).map(extension => extension.path);
+    }
+    if (this.closed) throw failure('Pi runtime is shutting down.', 503, 'runtime_closed');
+    const worker = new RpcWorker(this.getCommand(), { cwd: config.workdir || process.cwd(), projectTrust: config.projectTrust || 'default',
+      enableSkills: config.enableSkills === true, toolOverrides: config.toolOverrides || {}, logger: this.logger, ...options, selectedExtensions });
+    this.workers.add(worker);
+    worker.once('failure', () => this.workers.delete(worker));
+    return worker;
+  }
+
+  async extensions(config = this.getConfig()) {
+    try { return await discoverExtensions({ ...config, workdir: config.workdir || process.cwd() }); }
+    catch { throw failure('Could not discover configured Pi extensions. Check Pi package and project configuration.', 503, 'extension_discovery_failed'); }
+  }
+
+  async capabilities() {
+    const [probe, extensions] = await Promise.allSettled([this.check(), this.extensions()]);
+    const snapshot = probe.status === 'fulfilled' ? probe.value : undefined;
+    const config = this.getConfig();
+    const tools = snapshot?.toolDetails?.length ? snapshot.toolDetails : (snapshot?.availableTools || []).map(name => ({
+      name, description: '', active: snapshot.tools.includes(name), exposure: 'direct', ...toolPolicy(name, config.toolOverrides || {}),
+    }));
+    const errors = [probe.status === 'rejected' || !snapshot?.available ? snapshot?.error || 'Pi tool discovery is unavailable.' : null,
+      extensions.status === 'rejected' ? 'Pi extension discovery is unavailable.' : null].filter(Boolean);
+    return { tools, extensions: extensions.status === 'fulfilled' ? extensions.value : [], ...(errors.length ? { error: errors.join(' ') } : {}) };
   }
 
   async models() {
@@ -279,7 +325,7 @@ export class PiRuntime {
     let worker;
     try {
       if (this.closed) throw failure('Pi runtime is shutting down.', 503, 'runtime_closed');
-      worker = this.createWorker({ saveSessions: false });
+      worker = await this.createWorker({ saveSessions: false });
       this.probeWorkers.add(worker);
       const data = await worker.send({ type: 'get_available_models' });
       return (data?.models || []).map((model) => ({
@@ -310,6 +356,9 @@ export class PiRuntime {
       projectTrust: config.projectTrust || 'default',
       saveSessions: config.saveSessions === true,
       enableSkills: config.enableSkills === true,
+      toolOverrides: canonicalOverrides(config.toolOverrides || {}),
+      enableExtensions: config.enableExtensions !== false,
+      extensionOverrides: canonicalOverrides(config.extensionOverrides || {}),
     };
     if (this.retiredIds.has(id)) throw failure('This session has expired or was closed. Use a new session ID to start a conversation.', 409, 'session_expired');
     if (existing) {
@@ -319,7 +368,7 @@ export class PiRuntime {
         throw failure('This Pi session has exited; start a new session.', 409, 'session_expired');
       }
       if (JSON.stringify(existing.settings) !== JSON.stringify(settings)) {
-        throw failure('Model, effort, system prompt, working directory, project trust, session saving, or Skills loading changed. Start a new session.', 409, 'session_configuration_changed');
+        throw failure('Model, effort, system prompt, working directory, project trust, session saving, Skills, tools, or extensions changed. Start a new session.', 409, 'session_configuration_changed');
       }
       existing.busy = true;
       existing.lastUsedAt = Date.now();
@@ -350,7 +399,8 @@ export class PiRuntime {
     });
     this.sessions.set(id, session);
     try {
-      session.worker = this.createWorker(settings);
+      session.worker = await this.createWorker(settings);
+      if (this.sessions.get(id) !== session) throw failure('Pi session was closed during startup. Use a new session ID.', 409, 'session_expired');
       session.worker.on('failure', () => { this.retire(session); });
       const state = await session.worker.send({ type: 'get_state' });
       session.worker.assertMetadata();
@@ -499,8 +549,7 @@ export class PiRuntime {
   async close() {
     this.closed = true;
     clearInterval(this.housekeeping);
-    const sessions = [...this.sessions.values()];
     this.sessions.clear();
-    await Promise.all([...sessions.map((session) => session.worker?.close()), ...[...this.probeWorkers].map((worker) => worker.close())]);
+    await Promise.all([...this.workers].map(worker => worker.close()));
   }
 }

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Deterministic JSONL Pi RPC peer. It never contacts a model provider.
 import { join } from 'node:path';
+import { toolPolicy } from '../../src/tool-policy.js';
 
 if (process.argv.includes('--version')) {
   console.log('1.4.0');
@@ -15,6 +16,17 @@ let selectedModel = argument('--model', 'fake/fake-model');
 let thinkingLevel = argument('--thinking', selectedModel === 'fake/plain-model' ? 'off' : 'medium');
 // Report persistence metadata without creating a session file in this fixture.
 const sessionFile = process.argv.includes('--no-session') ? null : join(process.cwd(), `fake-session-${process.pid}.jsonl`);
+const toolOverrides = JSON.parse(process.env.PICALL_TOOL_OVERRIDES || '{}');
+const fixtureTools = [
+  { name: 'read', description: 'Read fixture files.', exposure: 'direct' },
+  { name: 'bash', description: 'Run fixture shell commands.', exposure: 'direct' },
+  { name: 'fixture_inactive', description: 'An available fixture tool.', exposure: 'direct' },
+];
+const toolDetails = fixtureTools.map(tool => {
+  const policy = toolPolicy(tool, toolOverrides);
+  return { ...tool, ...policy,
+    active: policy.enabled && (tool.name !== 'fixture_inactive' || toolOverrides[tool.name] === true) };
+});
 let turn = 0;
 let running = false;
 let pendingTimer;
@@ -51,7 +63,8 @@ function handle(command) {
       break;
     case 'get_state':
       emit({ type: 'extension_ui_request', method: 'setStatus', statusKey: 'picall_runtime',
-        statusText: JSON.stringify({ activeTools: ['read', 'bash'], availableTools: ['read', 'bash', 'fixture_inactive'] }) });
+        statusText: JSON.stringify({ activeTools: toolDetails.filter(tool => tool.active).map(tool => tool.name),
+          availableTools: fixtureTools.map(tool => tool.name), toolDetails }) });
       response(command, { model: model(), thinkingLevel, isStreaming: running, sessionId: `fake-${process.pid}`, sessionFile, messages: [] });
       break;
     case 'set_model':

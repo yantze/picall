@@ -146,15 +146,16 @@ export function createApp({ configStore, runtime, logger }) {
       if (path === '/api/status' && req.method === 'GET') {
         const pi = await runtime.check();
         const sessions = runtime.list();
-        const { workdir, projectTrust, saveSessions, enableSkills } = configStore.value;
+        const { workdir, projectTrust, saveSessions, enableSkills, enableExtensions } = configStore.value;
         return json(res, 200, { version: VERSION, uptime: Math.floor((Date.now() - started) / 1000), pi,
           sessions: { total: sessions.length, busy: sessions.filter(s => s.busy).length }, requests: metrics,
-          config: { workdir, projectTrust, saveSessions, enableSkills }, authRequired: Boolean(configStore.value.apiKey) });
+          config: { workdir, projectTrust, saveSessions, enableSkills, enableExtensions }, authRequired: Boolean(configStore.value.apiKey) });
       }
       if (path === '/api/models' && req.method === 'GET') {
         try { return json(res, 200, { models: await runtime.models() }); }
         catch (error) { return json(res, 200, { models: [], error: error.message }); }
       }
+      if (path === '/api/capabilities' && req.method === 'GET') return json(res, 200, await runtime.capabilities());
       if (path === '/v1/models' && req.method === 'GET') {
         const models = await runtime.models();
         return json(res, 200, { object: 'list', data: models.map(openAIModel) });
