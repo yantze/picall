@@ -212,13 +212,12 @@ test('overlapping requests for one session return 409 rather than corrupting its
   assert.equal(sessions.sessions[0].busy, false);
 });
 
-test('invalid payloads and unknown models return structured errors', async (t) => {
+test('invalid payloads return structured errors', async (t) => {
   const { request } = await setup(t);
   for (const body of [
     {}, { messages: [] }, { messages: 'not-an-array' },
     { messages: [{ role: 'user', content: 123 }] },
     completion('hello', { stream: 'yes' }),
-    completion('hello', { model: 'fake/missing' }),
   ]) {
     const response = await request('/v1/chat/completions', { method: 'POST', body });
     assert.equal(response.status, 400, JSON.stringify(body));
@@ -226,6 +225,29 @@ test('invalid payloads and unknown models return structured errors', async (t) =
     assert.equal(typeof result.error.message, 'string');
     assert.ok(result.error.message.length);
   }
+});
+
+test('unknown models return readable OpenAI JSON errors before committing an SSE response', async (t) => {
+  const apiKey = 'sk-model-error-test';
+  const { request, runtime } = await setup(t, { apiKey });
+  const missingModel = 'fake/missing-model';
+  for (const stream of [false, true]) {
+    const response = await request('/v1/chat/completions', { method: 'POST',
+      headers: { authorization: `Bearer ${apiKey}`, origin: 'https://client.example',
+        accept: stream ? 'text/event-stream' : 'application/json' },
+      body: completion('Hello', { model: missingModel, stream }) });
+    assert.equal(response.status, 404);
+    assert.match(response.headers.get('content-type'), /^application\/json\b/);
+    assert.equal(response.headers.get('access-control-allow-origin'), '*');
+    assert.equal(response.headers.get('x-session-id'), null);
+    const { error } = await response.json();
+    assert.equal(error.type, 'invalid_request_error');
+    assert.equal(error.code, 'model_not_found');
+    assert.equal(error.param, 'model');
+    assert.ok(error.message.includes(missingModel));
+    assert.match(error.message, /\/v1\/models/);
+  }
+  assert.equal(runtime.list().length, 0);
 });
 
 test('settings persist, invalid updates are atomic, and keys are generated without implicit saving', async (t) => {
@@ -328,14 +350,21 @@ test('provider failures stay errors in both JSON and SSE responses', async (t) =
   const { request } = await setup(t);
   const response = await request('/v1/chat/completions', { method: 'POST', body: completion('FAIL_PROVIDER:') });
   assert.equal(response.status, 502);
-  assert.equal((await response.json()).error.code, 'provider_error');
+  assert.deepEqual((await response.json()).error, {
+    message: 'Fake provider failed', type: 'api_error', param: null, code: 'provider_error',
+  });
   const stream = await request('/v1/chat/completions', { method: 'POST', body: completion('FAIL_PROVIDER:', { stream: true }) });
   assert.equal(stream.status, 200); // Headers are committed before the provider runs.
+  assert.match(stream.headers.get('content-type'), /^text\/event-stream\b/);
   const wire = await stream.text();
   const records = wire.split('\n').filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trim());
   assert.equal(records.at(-1), '[DONE]');
   const chunks = records.filter((data) => data !== '[DONE]').map((data) => JSON.parse(data));
-  assert.ok(chunks.some((chunk) => chunk.error?.code === 'provider_error'));
+  const errors = chunks.filter((chunk) => chunk.error);
+  assert.equal(errors.length, 1);
+  assert.deepEqual(errors[0].error, {
+    message: 'Fake provider failed', type: 'api_error', param: null, code: 'provider_error',
+  });
   assert.ok(!chunks.some((chunk) => chunk.choices?.some((choice) => choice.finish_reason === 'stop')));
 });
 
@@ -404,7 +433,11 @@ test('model discovery exposes Pi capabilities and model retrieval without a synt
   }
   const absent = await request('/v1/models/fake/missing');
   assert.equal(absent.status, 404);
-  assert.equal((await absent.json()).error.code, 'model_not_found');
+  const { error } = await absent.json();
+  assert.equal(error.type, 'invalid_request_error');
+  assert.equal(error.code, 'model_not_found');
+  assert.equal(error.param, 'model');
+  assert.ok(error.message.includes('fake/missing'));
 });
 
 test('separate clients select models and effort without gateway model defaults', async (t) => {
@@ -450,12 +483,12 @@ test('request selection rejects missing models and unsupported effort levels', a
   const { request, runtime } = await setup(t);
   for (const body of [
     { messages: [{ role: 'user', content: 'hello' }] },
-    completion('hello', { model: 'pi' }),
     completion('hello', { model: 'fake/plain-model', reasoning_effort: 'high' }),
     completion('hello', { model: 'fake/limited-model', reasoning_effort: 'medium' }),
     completion('hello', { reasoning_effort: 'xhigh' }),
     completion('hello', { context_window: 64000 }),
   ]) assert.equal((await request('/v1/chat/completions', { method: 'POST', body })).status, 400);
+  assert.equal((await request('/v1/chat/completions', { method: 'POST', body: completion('hello', { model: 'pi' }) })).status, 404);
   assert.equal(runtime.list().length, 0);
 });
 

@@ -21,7 +21,7 @@ function errorBody(error) {
   const status = error.status || 502;
   return { error: { message: status >= 500 && !error.code ? 'Internal service error. See operational logs.' : error.message,
     type: status === 401 ? 'authentication_error' : status < 500 ? 'invalid_request_error' : 'api_error',
-    code: error.code || 'internal_error' } };
+    param: error.param ?? null, code: error.code || 'internal_error' } };
 }
 async function body(req) {
   if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] || '')) throw appError('Content-Type must be application/json.', 415);
@@ -60,10 +60,10 @@ function normalize(input) {
   // temperature field for client compatibility, keeping Pi's model defaults.
   if (input.temperature !== undefined && input.temperature !== null &&
       (typeof input.temperature !== 'number' || !Number.isFinite(input.temperature) || input.temperature < 0 || input.temperature > 2)) {
-    throw appError('temperature must be a number between 0 and 2, or null.');
+    throw appError('temperature must be a number between 0 and 2, or null.', 400, 'invalid_request', 'temperature');
   }
   for (const key of ['tools', 'tool_choice', 'functions', 'function_call', 'response_format', 'top_p', 'max_tokens', 'max_completion_tokens', 'stop', 'logprobs', 'top_logprobs', 'seed', 'presence_penalty', 'frequency_penalty', 'context_window', 'contextWindow']) {
-    if (input[key] !== undefined && input[key] !== null) throw appError(`${key} is not supported by the Pi RPC gateway.`, 400, 'unsupported_parameter');
+    if (input[key] !== undefined && input[key] !== null) throw appError(`${key} is not supported by the Pi RPC gateway.`, 400, 'unsupported_parameter', key);
   }
   if (input.reasoning_effort !== undefined && input.reasoning_effort !== null && input.reasoning_effort !== 'none' && !EFFORTS.includes(input.reasoning_effort)) throw appError('Unsupported reasoning_effort.');
   if (input.stream_options !== undefined && (!input.stream_options || typeof input.stream_options !== 'object' || Array.isArray(input.stream_options) || Object.keys(input.stream_options).some(k => k !== 'include_usage') || (input.stream_options.include_usage !== undefined && typeof input.stream_options.include_usage !== 'boolean'))) throw appError('Only stream_options.include_usage (boolean) is supported.');
@@ -164,7 +164,7 @@ export function createApp({ configStore, runtime, logger }) {
         try { id = decodeURIComponent(path.slice('/v1/models/'.length)); }
         catch { throw appError('Invalid model ID.'); }
         const model = (await runtime.models()).find(model => model.id === id);
-        if (!model) throw appError('Model not found.', 404, 'model_not_found');
+        if (!model) throw appError(`Model is unavailable: ${id}. Use /v1/models to discover models configured in Pi.`, 404, 'model_not_found', 'model');
         return json(res, 200, openAIModel(model));
       }
       if (path === '/api/sessions' && req.method === 'GET') return json(res, 200, { sessions: runtime.list() });
@@ -194,12 +194,12 @@ export function createApp({ configStore, runtime, logger }) {
         try {
           const input = await body(req);
           const normalized = normalize(input);
-          if (typeof input.model !== 'string' || !input.model.trim()) throw appError('model is required. Use a provider/model ID from /v1/models.');
+          if (typeof input.model !== 'string' || !input.model.trim()) throw appError('model is required. Use a provider/model ID from /v1/models.', 400, 'invalid_request', 'model');
           const model = input.model;
           const selected = (await runtime.models()).find(m => m.id === model);
-          if (!selected) throw appError(`Model is unavailable: ${model}. Use /v1/models to discover models configured in Pi.`, 400, 'model_not_found');
+          if (!selected) throw appError(`Model is unavailable: ${model}. Use /v1/models to discover models configured in Pi.`, 404, 'model_not_found', 'model');
           const effort = input.reasoning_effort === 'none' ? 'off' : input.reasoning_effort ?? undefined;
-          if (effort !== undefined && !selected.reasoningEfforts.includes(effort)) throw appError(`This model does not support reasoning_effort ${effort}. Supported: ${selected.reasoningEfforts.join(', ')}.`, 400, 'unsupported_effort');
+          if (effort !== undefined && !selected.reasoningEfforts.includes(effort)) throw appError(`This model does not support reasoning_effort ${effort}. Supported: ${selected.reasoningEfforts.join(', ')}.`, 400, 'unsupported_effort', 'reasoning_effort');
           const rawSession = req.headers['x-session-id'];
           if (rawSession !== undefined && (typeof rawSession !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(rawSession))) throw appError('X-Session-Id must be 1–128 letters, digits, dots, underscores, or hyphens.');
           const liveIds = new Set(runtime.list().map(s => s.id));

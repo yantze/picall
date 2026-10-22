@@ -142,6 +142,23 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 
 图片/音频、客户端 function calling、`top_p`、`max_tokens`、`max_completion_tokens`、`stop`、`response_format`、logprobs、seed 和 penalties 尚未映射到 Pi RPC；传入时返回 `400`，不会假装生效。工具由 Pi 内部执行，不会作为 OpenAI `tool_calls` 返回给调用端。暂不提供 `/v1/responses` 和 embeddings。
 
+### 错误响应
+
+模型不存在或未在 Pi 中启用时，返回 HTTP `404` 和 OpenAI 格式的 JSON 错误：
+
+```json
+{
+  "error": {
+    "message": "Model is unavailable: provider/missing-model. Use /v1/models to discover models configured in Pi.",
+    "type": "invalid_request_error",
+    "param": "model",
+    "code": "model_not_found"
+  }
+}
+```
+
+即使请求设置 `stream: true`，在流开始前发现的错误仍使用非 2xx HTTP 状态和 JSON；客户端应先检查状态并读取 `error.message`。流开始后的执行错误通过 SSE 的 `data: {"error": ...}` 返回，随后发送 `[DONE]`，不会返回成功的 finish reason。错误与连接失败应分别展示。
+
 ## MCP、Skills、扩展
 
 配置由 Pi 原生管理，PiCall 启动的进程会继承同一用户和工作目录：

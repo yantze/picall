@@ -11,8 +11,8 @@ export const DEFAULTS = Object.freeze({
   requestTimeoutSeconds: 300, projectTrust: 'default',
 });
 
-export function appError(message, status = 400, code = 'invalid_request') {
-  return Object.assign(new Error(message), { status, code });
+export function appError(message, status = 400, code = 'invalid_request', param = null) {
+  return Object.assign(new Error(message), { status, code, param });
 }
 
 function validate(values) {
