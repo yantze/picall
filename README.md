@@ -14,7 +14,7 @@
 - 独立日志标签页、实时事件、过滤搜索、会话查看与关闭；试运行显示工具加载清单和实际调用状态。
 - 一个会话一个 Pi 子进程，支持 `X-Session-Id` 保留工具调用和多轮上下文。
 - 可选保存 Pi 原生会话，记录请求、回复和工具结果，在 Pi CLI 中查看或继续。
-- 使用 Pi 原生模型认证、MCP、extensions、skills 和 Pi packages。
+- 使用 Pi 原生模型认证、MCP、extensions 和 Pi packages；Skills 默认关闭，可在页面开启。
 
 ## 安装与启动
 
@@ -32,7 +32,7 @@ picall --workdir /absolute/path/to/your/project
 ```bash
 npm ci
 npm start -- --workdir /absolute/path/to/your/project
-# 或 npm pack 后 npm install -g ./yantze-picall-0.3.0.tgz
+# 或 npm pack 后 npm install -g ./yantze-picall-0.4.0.tgz
 ```
 
 启动后打开终端输出的本地管理地址，默认端口 **8787**。管理页保存 API key、会话和项目设置；Pi 模型目录只读展示能力。试运行页作为一个客户端，选择仅用于本次请求的模型和推理强度，不保存为服务默认值。日志入口可在新标签页中打开。
@@ -186,6 +186,19 @@ picall --workdir /path/to/project --save-sessions
 - Pi packages：`picall pi install <package>`，随后创建新 PiCall 会话加载。
 
 管理页提供服务设置、只读模型目录、试运行及会话管理；MCP 和 packages 的安装配置使用 Pi CLI/配置文件。模型、推理强度由真实客户端逐请求指定。
+
+### Skills 加载开关
+
+服务默认关闭 Skills，启动 Pi RPC 时传入原生 `--no-skills`。旧配置没有该字段时也默认关闭。在管理页“会话与运行目录”中开启“加载 Pi Skills”并保存后，新会话会按 Pi 的配置自动加载 Skills；项目 Skills 仍遵循项目信任设置。
+
+管理 API `PUT /api/config` 使用布尔字段 `enableSkills`。启动参数可覆盖保存的设置：
+
+```bash
+picall --workdir /path/to/project --enable-skills
+picall --workdir /path/to/project --no-skills
+```
+
+多个开关以最后一个为准。切换后请新建会话；旧 `X-Session-Id` 返回 `409 session_configuration_changed`，管理页保存后会自动开始新会话。该设置遵循 Pi 原生 `--no-skills` 的加载行为，MCP、扩展和基础工具仍按原配置运行。它作用于服务启动的 Pi RPC 进程；`picall pi` 的参数仍原样传给交互式 Pi。
 
 ### 终端 Pi 能联网，试运行却说“没有搜索/浏览工具”？
 

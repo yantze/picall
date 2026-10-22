@@ -60,6 +60,7 @@ function applyConfig(config) {
   $('max-sessions').value = config.maxSessions ?? 8;
   $('idle-timeout').value = config.idleTimeoutMinutes ?? 30;
   $('save-sessions').checked = config.saveSessions === true;
+  $('enable-skills').checked = config.enableSkills === true;
   $('workdir').value = config.workdir || '';
   $('project-trust').value = config.projectTrust || 'default';
   updateProjectTrustHelp();
@@ -284,6 +285,7 @@ async function saveConfig(event) {
     maxSessions: Number($('max-sessions').value),
     idleTimeoutMinutes: Number($('idle-timeout').value),
     saveSessions: $('save-sessions').checked,
+    enableSkills: $('enable-skills').checked,
     projectTrust: $('project-trust').value,
   };
   if ($('disable-key').checked) patch.apiKey = '';

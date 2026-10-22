@@ -146,10 +146,10 @@ export function createApp({ configStore, runtime, logger }) {
       if (path === '/api/status' && req.method === 'GET') {
         const pi = await runtime.check();
         const sessions = runtime.list();
-        const { workdir, projectTrust, saveSessions } = configStore.value;
+        const { workdir, projectTrust, saveSessions, enableSkills } = configStore.value;
         return json(res, 200, { version: VERSION, uptime: Math.floor((Date.now() - started) / 1000), pi,
           sessions: { total: sessions.length, busy: sessions.filter(s => s.busy).length }, requests: metrics,
-          config: { workdir, projectTrust, saveSessions }, authRequired: Boolean(configStore.value.apiKey) });
+          config: { workdir, projectTrust, saveSessions, enableSkills }, authRequired: Boolean(configStore.value.apiKey) });
       }
       if (path === '/api/models' && req.method === 'GET') {
         try { return json(res, 200, { models: await runtime.models() }); }

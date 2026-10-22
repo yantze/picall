@@ -49,7 +49,7 @@ function bundledCommand() {
 }
 
 class RpcWorker extends EventEmitter {
-  constructor(command, { cwd, model, effort, systemPrompt, projectTrust, saveSessions = false, logger }) {
+  constructor(command, { cwd, model, effort, systemPrompt, projectTrust, saveSessions = false, enableSkills = false, logger }) {
     super();
     this.pending = new Map();
     this.sequence = 0;
@@ -61,6 +61,7 @@ class RpcWorker extends EventEmitter {
     this.metadataKnown = false;
     const args = [...command.args, '--mode', 'rpc', '--extension', extensionPath];
     if (!saveSessions) args.push('--no-session');
+    if (!enableSkills) args.push('--no-skills');
     if (projectTrust === 'allow') args.push('--approve');
     if (projectTrust === 'deny') args.push('--no-approve');
     if (model) args.push('--model', model);
@@ -218,7 +219,7 @@ export class PiRuntime {
 
   probeKey() {
     const config = this.getConfig();
-    return JSON.stringify({ ...runtimeContext(config.workdir || process.cwd(), this.command), projectTrust: config.projectTrust || 'default' });
+    return JSON.stringify({ ...runtimeContext(config.workdir || process.cwd(), this.command), projectTrust: config.projectTrust || 'default', enableSkills: config.enableSkills === true });
   }
 
   enqueueProbe(task) {
@@ -259,7 +260,7 @@ export class PiRuntime {
 
   createWorker(options) {
     const config = this.getConfig();
-    return new RpcWorker(this.getCommand(), { cwd: config.workdir || process.cwd(), projectTrust: config.projectTrust || 'default', logger: this.logger, ...options });
+    return new RpcWorker(this.getCommand(), { cwd: config.workdir || process.cwd(), projectTrust: config.projectTrust || 'default', enableSkills: config.enableSkills === true, logger: this.logger, ...options });
   }
 
   async models() {
@@ -308,6 +309,7 @@ export class PiRuntime {
       workdir: config.workdir || process.cwd(),
       projectTrust: config.projectTrust || 'default',
       saveSessions: config.saveSessions === true,
+      enableSkills: config.enableSkills === true,
     };
     if (this.retiredIds.has(id)) throw failure('This session has expired or was closed. Use a new session ID to start a conversation.', 409, 'session_expired');
     if (existing) {
@@ -317,7 +319,7 @@ export class PiRuntime {
         throw failure('This Pi session has exited; start a new session.', 409, 'session_expired');
       }
       if (JSON.stringify(existing.settings) !== JSON.stringify(settings)) {
-        throw failure('Model, effort, system prompt, working directory, project trust, or session saving changed. Start a new session.', 409, 'session_configuration_changed');
+        throw failure('Model, effort, system prompt, working directory, project trust, session saving, or Skills loading changed. Start a new session.', 409, 'session_configuration_changed');
       }
       existing.busy = true;
       existing.lastUsedAt = Date.now();
@@ -337,7 +339,7 @@ export class PiRuntime {
     // accidentally create two Pi agents with different conversation state.
     const session = {
       id, model: settings.model, busy: true, createdAt: Date.now(), lastUsedAt: Date.now(), settings,
-      saveSessions: settings.saveSessions, sessionFile: null,
+      saveSessions: settings.saveSessions, sessionFile: null, enableSkills: settings.enableSkills,
       worker: null,
       run: (prompt, runOptions) => this.run(session, prompt, runOptions),
     };
@@ -360,7 +362,7 @@ export class PiRuntime {
       const levels = await session.worker.send({ type: 'get_available_thinking_levels' });
       if (settings.effort !== null && levels?.levels && !levels.levels.includes(settings.effort)) throw failure(`This model does not support effort ${settings.effort}. Supported: ${levels.levels.join(', ')}.`, 400, 'unsupported_effort');
       if (settings.effort !== null && state.thinkingLevel !== settings.effort) throw failure('Pi did not apply the requested reasoning effort.', 502, 'effort_not_applied');
-      this.logger?.log('info', 'Pi session created.', { sessionId: id, model: session.model, saveSessions: session.saveSessions, sessionFile: session.sessionFile });
+      this.logger?.log('info', 'Pi session created.', { sessionId: id, model: session.model, saveSessions: session.saveSessions, sessionFile: session.sessionFile, enableSkills: session.enableSkills });
       return session;
     } catch (error) {
       this.retire(session);
@@ -471,7 +473,7 @@ export class PiRuntime {
   }
 
   list() {
-    return [...this.sessions.values()].map(({ id, model, busy, createdAt, lastUsedAt, tools, availableTools, saveSessions, sessionFile }) => ({ id, model, busy, createdAt, lastUsedAt, tools, availableTools, saveSessions, sessionFile }));
+    return [...this.sessions.values()].map(({ id, model, busy, createdAt, lastUsedAt, tools, availableTools, saveSessions, sessionFile, enableSkills }) => ({ id, model, busy, createdAt, lastUsedAt, tools, availableTools, saveSessions, sessionFile, enableSkills }));
   }
 
   retire(session) {

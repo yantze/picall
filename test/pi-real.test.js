@@ -275,3 +275,75 @@ test('native Pi history is opt-in, survives shutdown and records multiple turns 
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('real Pi skills stay disabled by default and enabled skills still respect project trust', { timeout: 45_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'picall-skills-opt-in-'));
+  const profile = join(root, 'profile');
+  const workdir = join(root, 'project');
+  const previousProfile = process.env.PI_CODING_AGENT_DIR;
+  const userSkill = { name: 'picall-isolated-user-probe', description: 'PICALL_USER_SKILL_DESCRIPTION_CANARY' };
+  const projectSkill = { name: 'picall-isolated-project-probe', description: 'PICALL_PROJECT_SKILL_DESCRIPTION_CANARY' };
+  let runtime;
+  let modelCalls = 0;
+  const server = http.createServer(async (request, response) => {
+    for await (const _chunk of request) { /* Consume the local fixture request. */ }
+    modelCalls++;
+    response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    const chunk = (delta, finishReason = null) => response.write(`data: ${JSON.stringify({
+      id: 'chatcmpl-skills-opt-in-test', object: 'chat.completion.chunk',
+      created: Math.floor(Date.now() / 1000), model: 'skills-test',
+      choices: [{ index: 0, delta, finish_reason: finishReason }],
+    })}\n\n`);
+    chunk({ role: 'assistant', content: 'Skills fixture response.' });
+    chunk({}, 'stop');
+    response.end('data: [DONE]\n\n');
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    for (const [directory, skill] of [[join(profile, 'skills', userSkill.name), userSkill], [join(workdir, '.pi', 'skills', projectSkill.name), projectSkill]]) {
+      await mkdir(directory, { recursive: true });
+      await writeFile(join(directory, 'SKILL.md'), `---\nname: ${skill.name}\ndescription: ${skill.description}\n---\n\nUse this isolated test skill only when explicitly requested.\n`);
+    }
+    await writeFile(join(profile, 'models.json'), JSON.stringify({ providers: { 'picall-test': {
+      baseUrl: `http://127.0.0.1:${server.address().port}/v1`, api: 'openai-completions', apiKey: 'local-test-fixture',
+      models: [{ id: 'skills-test', name: 'Skills Test', contextWindow: 32_000, maxTokens: 1024,
+        reasoning: false, input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }],
+    } } }), { mode: 0o600 });
+    process.env.PI_CODING_AGENT_DIR = profile;
+    const config = { workdir, projectTrust: 'allow', requestTimeoutSeconds: 20 };
+    const selection = { model: 'picall-test/skills-test', effort: 'off' };
+    runtime = new PiRuntime({ getConfig: () => config });
+    for (const scenario of [
+      { setting: undefined, trust: 'allow', user: false, project: false },
+      { setting: false, trust: 'allow', user: false, project: false },
+      { setting: true, trust: 'allow', user: true, project: true },
+      { setting: true, trust: 'deny', user: true, project: false },
+    ]) {
+      if (scenario.setting === undefined) delete config.enableSkills;
+      else config.enableSkills = scenario.setting;
+      config.projectTrust = scenario.trust;
+      const session = await runtime.acquire(selection);
+      const { commands } = await session.worker.send({ type: 'get_commands' });
+      const userCommand = commands.find(command => command.source === 'skill' && command.name === `skill:${userSkill.name}`);
+      const projectCommand = commands.find(command => command.source === 'skill' && command.name === `skill:${projectSkill.name}`);
+      const label = `enableSkills=${scenario.setting}, projectTrust=${scenario.trust}`;
+      assert.equal(Boolean(userCommand), scenario.user, `${label}: user skill must reflect real Pi discovery`);
+      assert.equal(Boolean(projectCommand), scenario.project, `${label}: project skill must also respect project trust`);
+      if (userCommand) assert.equal(userCommand.description, userSkill.description);
+      if (projectCommand) assert.equal(projectCommand.description, projectSkill.description);
+      if (scenario.setting === true && scenario.trust === 'allow') {
+        assert.equal((await session.run('Reply with the local fixture response.')).text, 'Skills fixture response.');
+        config.enableSkills = false;
+        await assert.rejects(runtime.acquire({ sessionId: session.id, ...selection }), error => error.code === 'session_configuration_changed');
+      }
+    }
+    assert.equal(modelCalls, 1, 'skill discovery must not require upstream model calls');
+  } finally {
+    await runtime?.close();
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+    if (previousProfile === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousProfile;
+    await rm(root, { recursive: true, force: true });
+  }
+});

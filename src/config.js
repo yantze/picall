@@ -8,7 +8,7 @@ export const PROJECT_TRUST = ['default', 'allow', 'deny'];
 export const DEFAULTS = Object.freeze({
   host: '127.0.0.1', port: 8787,
   apiKey: '', workdir: process.cwd(), maxSessions: 8, idleTimeoutMinutes: 30,
-  requestTimeoutSeconds: 300, projectTrust: 'default', saveSessions: false,
+  requestTimeoutSeconds: 300, projectTrust: 'default', saveSessions: false, enableSkills: false,
 });
 
 export function appError(message, status = 400, code = 'invalid_request', param = null) {
@@ -27,6 +27,7 @@ function validate(values) {
   }
   if (!PROJECT_TRUST.includes(values.projectTrust)) throw appError('projectTrust must be default, allow, or deny.');
   if (typeof values.saveSessions !== 'boolean') throw appError('saveSessions must be a boolean.');
+  if (typeof values.enableSkills !== 'boolean') throw appError('enableSkills must be a boolean.');
   if (typeof values.apiKey !== 'string' || (values.apiKey && (!/^[\x21-\x7e]{8,256}$/.test(values.apiKey)))) throw appError('API key must contain 8–256 visible ASCII characters (or be empty to disable authentication).');
   if (typeof values.workdir !== 'string' || !isAbsolute(values.workdir)) throw appError('workdir must be an absolute path.');
 }
@@ -58,7 +59,7 @@ export class ConfigStore {
   update(patch) {
     const operation = this.queue.then(async () => {
       if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw appError('Settings must be a JSON object.');
-      const allowed = ['apiKey', 'maxSessions', 'idleTimeoutMinutes', 'requestTimeoutSeconds', 'projectTrust', 'saveSessions'];
+      const allowed = ['apiKey', 'maxSessions', 'idleTimeoutMinutes', 'requestTimeoutSeconds', 'projectTrust', 'saveSessions', 'enableSkills'];
       for (const key of Object.keys(patch)) if (!allowed.includes(key)) throw appError(`Setting is read-only or unknown: ${key}`);
       const next = { ...this.value, ...patch };
       validate(next);

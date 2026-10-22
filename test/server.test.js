@@ -613,3 +613,62 @@ test('session-saving changes require fresh sessions and expose each session pers
   assert.equal(newEphemeral.saveSessions, false);
   assert.equal(newEphemeral.sessionFile, null);
 });
+
+test('Skills setting upgrades legacy configuration safely and persists only boolean updates', async (t) => {
+  const apiKey = 'sk-skills-config-test';
+  const { request, configStore, dataDir } = await setup(t, {
+    apiKey, saveSessions: true, projectTrust: 'allow', maxSessions: 11,
+  });
+  const legacy = JSON.parse(await readFile(configStore.path, 'utf8'));
+  delete legacy.enableSkills;
+  const legacyContents = JSON.stringify(legacy);
+  await writeFile(configStore.path, legacyContents, { mode: 0o600 });
+  await configStore.load();
+  const { enableSkills: _enableSkills, ...unchangedSettings } = configStore.value;
+  assert.equal((await (await request('/api/config')).json()).enableSkills, false);
+  assert.equal(await readFile(configStore.path, 'utf8'), legacyContents);
+
+  for (const enableSkills of [true, false]) {
+    const saved = await request('/api/config', { method: 'PUT', body: { enableSkills } });
+    assert.equal(saved.status, 200);
+    const config = await saved.json();
+    assert.equal(config.enableSkills, enableSkills);
+    assert.equal(config.apiKeyConfigured, true);
+    assert.equal(Object.hasOwn(config, 'apiKey'), false);
+    for (const key of ['model', 'effort', 'contextWindow']) assert.equal(Object.hasOwn(config, key), false);
+    const reloaded = new ConfigStore({ dataDir, overrides: { workdir: dataDir } });
+    await reloaded.load();
+    assert.deepEqual(reloaded.value, { ...unchangedSettings, enableSkills });
+  }
+  const before = await readFile(configStore.path, 'utf8');
+  for (const enableSkills of ['true', 'false', 0, 1, null, {}, []]) {
+    const response = await request('/api/config', { method: 'PUT', body: { enableSkills } });
+    assert.equal(response.status, 400);
+    assert.match((await response.json()).error.message, /enableSkills.*boolean/);
+    assert.equal(await readFile(configStore.path, 'utf8'), before);
+    assert.deepEqual(configStore.value, { ...unchangedSettings, enableSkills: false });
+  }
+});
+
+test('Skills changes require fresh sessions and reach Pi without disabling registered tools', async (t) => {
+  const { request } = await setup(t);
+  const openSession = async (expected) => {
+    const response = await request('/v1/chat/completions', { method: 'POST', body: completion('SKILLS_METADATA:') });
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.deepEqual(JSON.parse(result.choices[0].message.content), { enableSkills: expected });
+    const id = response.headers.get('x-session-id');
+    const { sessions } = await (await request('/api/sessions')).json();
+    assert.deepEqual(new Set(sessions.find(session => session.id === id).tools), new Set(['read', 'bash']));
+    return id;
+  };
+  let id = await openSession(false);
+  for (const enableSkills of [true, false]) {
+    assert.equal((await request('/api/config', { method: 'PUT', body: { enableSkills } })).status, 200);
+    const previous = await request('/v1/chat/completions', { method: 'POST',
+      headers: { 'x-session-id': id }, body: completion('SKILLS_METADATA:') });
+    assert.equal(previous.status, 409);
+    assert.equal((await previous.json()).error.code, 'session_configuration_changed');
+    id = await openSession(enableSkills);
+  }
+});

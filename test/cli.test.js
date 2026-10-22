@@ -156,3 +156,25 @@ test('CLI help documents both session-saving switches', async () => {
   assert.match(stdout, /--save-sessions\b/);
   assert.match(stdout, /--no-save-sessions\b/);
 });
+
+for (const { saved, flags, expected } of [
+  { saved: true, flags: [], expected: true },
+  { saved: false, flags: ['--enable-skills'], expected: true },
+  { saved: true, flags: ['--no-skills'], expected: false },
+  { saved: true, flags: ['--enable-skills', '--no-skills'], expected: false },
+  { saved: false, flags: ['--no-skills', '--enable-skills'], expected: true },
+]) {
+  test(`CLI Skills ${flags.join(' ') || '(saved setting)'} overrides saved ${saved}`, { timeout: 30_000 }, async (t) => {
+    const { get } = await startCli(t, { savedConfig: { enableSkills: saved, saveSessions: true }, flags: () => flags });
+    const config = await get('/api/config');
+    assert.equal(config.enableSkills, expected);
+    assert.equal(config.saveSessions, true);
+  });
+}
+
+test('CLI Skills help documents enabling and disabling Skills', async () => {
+  const { stdout, stderr } = await execFileAsync(process.execPath, [cli, '--help']);
+  assert.equal(stderr, '');
+  assert.match(stdout, /--enable-skills\b/);
+  assert.match(stdout, /--no-skills\b/);
+});
