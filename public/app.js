@@ -101,8 +101,8 @@ async function loadStatus() {
 function updateProjectTrustHelp() {
   const value = $('project-trust').value;
   $('project-trust-help').textContent = {
-    default: '遵循 Pi 已保存的项目资源信任；未信任时，项目扩展与 MCP 可能不会加载。',
-    allow: '保存后将信任当前工作目录，加载并执行该项目配置的扩展与 MCP。仅对你信任的项目启用；新会话生效。',
+    default: '遵循 Pi 已保存的项目资源信任。显式 --workdir 启动时默认自动选择 allow；未信任时，项目扩展与 MCP 可能不会加载。',
+    allow: '信任当前工作目录，允许加载并执行该项目配置的扩展与 MCP。显式 --workdir 启动会自动启用；手动修改后须保存，新会话生效。',
     deny: '忽略当前工作目录的项目资源，不加载其中的扩展与 MCP；用户级配置仍由 Pi 管理。',
   }[value];
   $('project-trust-help').classList.toggle('trust-allow', value === 'allow');

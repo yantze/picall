@@ -30,10 +30,12 @@ picall --workdir /absolute/path/to/your/project
 ```bash
 npm ci
 npm start -- --workdir /absolute/path/to/your/project
-# 或 npm pack 后 npm install -g ./yantze-picall-0.1.2.tgz
+# 或 npm pack 后 npm install -g ./yantze-picall-0.1.3.tgz
 ```
 
 启动后打开终端输出的本地管理地址，默认端口 **8787**。先刷新模型列表、选择模型，按模型能力设置 effort，然后保存。页面的日志入口可在新标签页中打开。
+
+显式指定 `--workdir` 即视为信任该项目，自动加载其 Pi 项目配置、扩展和 MCP，无需额外信任参数。
 
 `@yantze/picall` 是包名，目前未发布到 npm registry；不要使用 registry 安装命令，直到单独完成发布。
 
@@ -124,19 +126,25 @@ Pi 默认的 `read / bash / edit / write` 不含独立网页搜索、浏览工�
 
 PiCall 使用内置 Pi，而终端的 `pi` 也可能是其他版本、别名或携带额外 `-e` 参数的包装脚本。请对比 `pi --version` 与 `picall pi --version`，并使用相同工作目录和 `PI_CODING_AGENT_DIR`。已有 PiCall 会话不会自动重载新安装的工具，配置变化后请点击“新会话”。
 
-**项目资源信任会影响工具加载。** Pi 1.4 的 RPC 无法显示内置项目信任提示；默认没有保存信任决定时，项目 `.pi` 下的 MCP、扩展和其他受保护配置可能被跳过。页面的“项目资源信任”提供三个选项：
+**指定工作目录即信任项目。** PiCall 将显式的 `--workdir` 视为对该项目的信任，自动向 Pi 传入 `--approve`，加载项目 `.pi` 下的 MCP、扩展和其他受保护配置；它优先于之前保存的 PiCall 信任设置。直接这样启动即可：
 
-- `default`：遵循 Pi 已保存的信任决定，保持默认行为。
+```bash
+picall --workdir /your/project
+```
+
+未指定 `--workdir` 时，PiCall 继续使用已保存的信任设置；首次启动默认为遵循 Pi 自己的信任决定。Pi 1.4 的 RPC 无法显示内置项目信任提示，此时未保存信任决定的项目资源可能被跳过。页面的“项目资源信任”仍可手动调整：
+
+- `default`：遵循 Pi 已保存的信任决定。
 - `allow`：信任当前工作目录，允许加载该项目配置、MCP 和扩展；扩展会在 Pi 进程中执行。
 - `deny`：忽略项目中的受保护资源。
 
-仅当你信任当前项目的配置和扩展时选择 `allow`。也可以使用启动参数作出本次显式选择：
+如需覆盖自动选择，可显式传入 `--project-trust default|allow|deny`；它的优先级高于 `--workdir` 的自动信任，且不受参数顺序影响。例如：
 
 ```bash
-picall --workdir /your/trusted/project --project-trust allow
+picall --workdir /your/project --project-trust deny
 ```
 
-或在同一目录运行 `picall pi`，通过 `/trust` 保存你自己的信任决定，然后重新创建 PiCall 会话。PiCall 不会自动批准项目，也不会自动批准扩展请求的交互式确认。依赖弹窗选择、输入或确认的扩展仍需适配无交互运行；被取消的请求会记录在日志中。
+也可以在同一目录运行 `picall pi`，通过 `/trust` 保存 Pi 自己的信任决定。修改加载策略后重新创建 PiCall 会话。指定 `--workdir` 会信任项目，但不会自动批准扩展请求的交互式确认。依赖弹窗选择、输入或确认的扩展仍需适配无交互运行；被取消的请求会记录在日志中。
 
 ### 启动时为什么会克隆其他 Git 仓库？
 

@@ -19,8 +19,8 @@ Usage: picall [--port 8787] [--host 127.0.0.1] [--workdir DIR] [--data-dir DIR]
 
 The management UI has no login. Only loopback hosts are supported.
 Pi uses its normal provider credentials, extensions, skills and MCP configuration.
-Project trust defaults to Pi's saved decisions. Use allow only for a project
-whose extensions and configuration you trust; deny skips project resources.
+An explicit --workdir trusts that project's configuration, extensions and MCP.
+Without --workdir, saved trust settings apply. --project-trust can override this.
 Use the bundled Pi CLI for login: picall pi (then type /login)
 `;
 async function main() {
@@ -45,6 +45,9 @@ async function main() {
     if (flag === '--workdir') options.workdir = resolve(value);
     if (flag === '--data-dir') dataDir = resolve(value);
     if (flag === '--project-trust') options.projectTrust = value;
+  }
+  if (options.workdir !== undefined && options.projectTrust === undefined) {
+    options.projectTrust = 'allow';
   }
   options.workdir = await realpath(options.workdir || process.cwd());
   if (!(await stat(options.workdir)).isDirectory()) throw new Error('workdir must be a directory.');
