@@ -1,6 +1,6 @@
 {
   "name": "@yantze/picall",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "description": "A local OpenAI-compatible API powered by the Pi coding agent",
   "type": "module",
   "bin": { "picall": "bin/picall.js" },
@@ -13,7 +13,7 @@
     "check": "node --check bin/picall.js && node --check src/server.js && node --check src/pi-rpc.js && node --check public/app.js"
   },
   "engines": { "node": ">=22.19.0" },
-  "dependencies": { "@earendil-works/pi-coding-agent": "1.4.0" },
+  "dependencies": { "@earendil-works/pi-ai": "1.4.0", "@earendil-works/pi-coding-agent": "1.4.0" },
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/yantze/picall.git" },
   "bugs": { "url": "https://github.com/yantze/picall/issues" },

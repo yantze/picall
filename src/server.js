@@ -62,14 +62,19 @@ function normalize(input) {
       (typeof input.temperature !== 'number' || !Number.isFinite(input.temperature) || input.temperature < 0 || input.temperature > 2)) {
     throw appError('temperature must be a number between 0 and 2, or null.');
   }
-  for (const key of ['tools', 'tool_choice', 'functions', 'function_call', 'response_format', 'top_p', 'max_tokens', 'max_completion_tokens', 'stop', 'logprobs', 'top_logprobs', 'seed', 'presence_penalty', 'frequency_penalty']) {
+  for (const key of ['tools', 'tool_choice', 'functions', 'function_call', 'response_format', 'top_p', 'max_tokens', 'max_completion_tokens', 'stop', 'logprobs', 'top_logprobs', 'seed', 'presence_penalty', 'frequency_penalty', 'context_window', 'contextWindow']) {
     if (input[key] !== undefined && input[key] !== null) throw appError(`${key} is not supported by the Pi RPC gateway.`, 400, 'unsupported_parameter');
   }
-  if (input.reasoning_effort !== undefined && !EFFORTS.includes(input.reasoning_effort)) throw appError('Unsupported reasoning_effort.');
+  if (input.reasoning_effort !== undefined && input.reasoning_effort !== null && input.reasoning_effort !== 'none' && !EFFORTS.includes(input.reasoning_effort)) throw appError('Unsupported reasoning_effort.');
   if (input.stream_options !== undefined && (!input.stream_options || typeof input.stream_options !== 'object' || Array.isArray(input.stream_options) || Object.keys(input.stream_options).some(k => k !== 'include_usage') || (input.stream_options.include_usage !== undefined && typeof input.stream_options.include_usage !== 'boolean'))) throw appError('Only stream_options.include_usage (boolean) is supported.');
   return { messages, systemPrompt: system.join('\n\n'), hasSystemPrompt: system.length > 0 };
 }
 const messageHash = message => createHash('sha256').update(JSON.stringify(message)).digest('hex');
+function openAIModel(model) {
+  return { id: model.id, object: 'model', created: 0, owned_by: model.provider,
+    name: model.name, context_window: model.contextWindow ?? null, max_output_tokens: model.maxTokens,
+    reasoning: model.reasoning, supported_reasoning_efforts: model.reasoningEfforts, input_modalities: model.input };
+}
 function promptFor(messages) {
   if (messages.length === 1) return messages[0].content;
   return 'Continue this conversation. Previous messages are provided as context:\n\n' + messages.map(m => `<${m.role}>\n${m.content}\n</${m.role}>`).join('\n\n');
@@ -141,10 +146,10 @@ export function createApp({ configStore, runtime, logger }) {
       if (path === '/api/status' && req.method === 'GET') {
         const pi = await runtime.check();
         const sessions = runtime.list();
-        const { model, effort, contextWindow } = configStore.value;
+        const { workdir, projectTrust } = configStore.value;
         return json(res, 200, { version: VERSION, uptime: Math.floor((Date.now() - started) / 1000), pi,
           sessions: { total: sessions.length, busy: sessions.filter(s => s.busy).length }, requests: metrics,
-          config: { model, effort, contextWindow }, authRequired: Boolean(configStore.value.apiKey) });
+          config: { workdir, projectTrust }, authRequired: Boolean(configStore.value.apiKey) });
       }
       if (path === '/api/models' && req.method === 'GET') {
         try { return json(res, 200, { models: await runtime.models() }); }
@@ -152,7 +157,15 @@ export function createApp({ configStore, runtime, logger }) {
       }
       if (path === '/v1/models' && req.method === 'GET') {
         const models = await runtime.models();
-        return json(res, 200, { object: 'list', data: [{ id: 'pi', object: 'model', created: 0, owned_by: 'picall' }, ...models.map(m => ({ id: m.id, object: 'model', created: 0, owned_by: m.provider }))] });
+        return json(res, 200, { object: 'list', data: models.map(openAIModel) });
+      }
+      if (path.startsWith('/v1/models/') && req.method === 'GET') {
+        let id;
+        try { id = decodeURIComponent(path.slice('/v1/models/'.length)); }
+        catch { throw appError('Invalid model ID.'); }
+        const model = (await runtime.models()).find(model => model.id === id);
+        if (!model) throw appError('Model not found.', 404, 'model_not_found');
+        return json(res, 200, openAIModel(model));
       }
       if (path === '/api/sessions' && req.method === 'GET') return json(res, 200, { sessions: runtime.list() });
       if (path.startsWith('/api/sessions/') && req.method === 'DELETE') {
@@ -181,13 +194,12 @@ export function createApp({ configStore, runtime, logger }) {
         try {
           const input = await body(req);
           const normalized = normalize(input);
-          if (input.model !== undefined && (typeof input.model !== 'string' || !input.model.trim())) throw appError('model must be a nonempty string.');
-          const config = configStore.value;
-          const model = !input.model || input.model === 'pi' ? config.model : input.model;
-          if (model) {
-            const models = await runtime.models();
-            if (!models.some(m => m.id === model)) throw appError(`Model is unavailable: ${model}. Configure its provider credentials in Pi first.`, 400, 'model_not_found');
-          }
+          if (typeof input.model !== 'string' || !input.model.trim()) throw appError('model is required. Use a provider/model ID from /v1/models.');
+          const model = input.model;
+          const selected = (await runtime.models()).find(m => m.id === model);
+          if (!selected) throw appError(`Model is unavailable: ${model}. Use /v1/models to discover models configured in Pi.`, 400, 'model_not_found');
+          const effort = input.reasoning_effort === 'none' ? 'off' : input.reasoning_effort ?? undefined;
+          if (effort !== undefined && !selected.reasoningEfforts.includes(effort)) throw appError(`This model does not support reasoning_effort ${effort}. Supported: ${selected.reasoningEfforts.join(', ')}.`, 400, 'unsupported_effort');
           const rawSession = req.headers['x-session-id'];
           if (rawSession !== undefined && (typeof rawSession !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(rawSession))) throw appError('X-Session-Id must be 1–128 letters, digits, dots, underscores, or hyphens.');
           const liveIds = new Set(runtime.list().map(s => s.id));
@@ -200,8 +212,7 @@ export function createApp({ configStore, runtime, logger }) {
             if (normalized.messages.length !== previous.count + 1 || JSON.stringify(prefix) !== JSON.stringify(previous.hashes)) throw appError('Session history does not match. Send only the next user message or the unchanged full history; use a new X-Session-Id to branch.', 409, 'session_history_conflict');
             promptMessages = normalized.messages.slice(previous.count);
           }
-          const session = await runtime.acquire({ sessionId: rawSession, model, systemPrompt,
-            effort: input.reasoning_effort || config.effort, contextWindow: config.contextWindow });
+          const session = await runtime.acquire({ sessionId: rawSession, model, systemPrompt, effort });
           if (controller.signal.aborted) {
             // run() owns the session lease and releases it even when already aborted.
             await session.run('', { signal: controller.signal });

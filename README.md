@@ -8,7 +8,8 @@
 ```
 
 - OpenAI 风格的 `/v1/models`、`/v1/chat/completions`，支持 JSON 和 SSE 流式响应。
-- 页面选择 `provider/model`、reasoning effort 和 context window，配置持久保存。
+- 客户端逐请求指定 `model` 和 `reasoning_effort`，PiCall 不保存模型默认值。
+- 从 Pi 查询可用模型及其推理级别、上下文窗口和最大输出长度，页面只读展示。
 - `/v1/*` 可配置 Bearer API key；本地管理页无需登录。
 - 独立日志标签页、实时事件、过滤搜索、会话查看与关闭；试运行显示工具加载清单和实际调用状态。
 - 一个会话一个 Pi 子进程，支持 `X-Session-Id` 保留工具调用和多轮上下文。
@@ -30,10 +31,10 @@ picall --workdir /absolute/path/to/your/project
 ```bash
 npm ci
 npm start -- --workdir /absolute/path/to/your/project
-# 或 npm pack 后 npm install -g ./yantze-picall-0.1.3.tgz
+# 或 npm pack 后 npm install -g ./yantze-picall-0.2.0.tgz
 ```
 
-启动后打开终端输出的本地管理地址，默认端口 **8787**。先刷新模型列表、选择模型，按模型能力设置 effort，然后保存。页面的日志入口可在新标签页中打开。
+启动后打开终端输出的本地管理地址，默认端口 **8787**。管理页保存 API key、会话和项目设置；Pi 模型目录只读展示能力。试运行页作为一个客户端，选择仅用于本次请求的模型和推理强度，不保存为服务默认值。日志入口可在新标签页中打开。
 
 显式指定 `--workdir` 即视为信任该项目，自动加载其 Pi 项目配置、扩展和 MCP，无需额外信任参数。
 
@@ -51,7 +52,7 @@ picall pi --version
 
 ## 调用 API
 
-在页面生成或填写 API key 后点击保存。未设置 key 时，API 接受同机调用。`model: "pi"` 使用页面保存的默认模型；也可以传 `/v1/models` 返回的完整 `provider/model` ID。
+在页面生成或填写 API key 后点击保存。未设置 key 时，API 接受同机调用。先通过 `/v1/models` 查询 Pi 的可用模型，再把返回的完整 `provider/model` ID 放进每次请求的 `model` 字段。下面的 `YOUR_PROVIDER/YOUR_MODEL` 需替换为实际 ID。
 
 ```bash
 curl http://127.0.0.1:8787/v1/models \
@@ -60,12 +61,12 @@ curl http://127.0.0.1:8787/v1/models \
 curl http://127.0.0.1:8787/v1/chat/completions \
   -H 'Authorization: Bearer YOUR_PICALL_KEY' \
   -H 'Content-Type: application/json' \
-  -d '{"model":"pi","messages":[{"role":"user","content":"检查当前项目并说明结构"}]}'
+  -d '{"model":"YOUR_PROVIDER/YOUR_MODEL","messages":[{"role":"user","content":"检查当前项目并说明结构"}]}'
 
 curl -N http://127.0.0.1:8787/v1/chat/completions \
   -H 'Authorization: Bearer YOUR_PICALL_KEY' \
   -H 'Content-Type: application/json' \
-  -d '{"model":"pi","stream":true,"stream_options":{"include_usage":true},"messages":[{"role":"user","content":"列出当前目录"}]}'
+  -d '{"model":"YOUR_PROVIDER/YOUR_MODEL","stream":true,"stream_options":{"include_usage":true},"messages":[{"role":"user","content":"列出当前目录"}]}'
 ```
 
 OpenAI Python SDK（`pip install openai`）：
@@ -75,10 +76,44 @@ from openai import OpenAI
 
 client = OpenAI(base_url="http://127.0.0.1:8787/v1", api_key="YOUR_PICALL_KEY")
 response = client.chat.completions.create(
-    model="pi",
+    model="YOUR_PROVIDER/YOUR_MODEL",
     messages=[{"role": "user", "content": "读取 README，概括这个项目"}],
 )
 print(response.choices[0].message.content)
+```
+
+### 查询模型和能力
+
+`GET /v1/models` 只返回 Pi 认为可用的真实模型，不再提供人工 `pi` 别名。`GET /v1/models/{provider/model}` 返回单个模型，同样受 API key 保护。
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "your-provider/your-model",
+      "object": "model",
+      "created": 0,
+      "owned_by": "your-provider",
+      "name": "Your Model",
+      "context_window": 131072,
+      "max_output_tokens": 8192,
+      "reasoning": true,
+      "supported_reasoning_efforts": ["off", "minimal", "low", "medium", "high"],
+      "input_modalities": ["text"]
+    }
+  ]
+}
+```
+
+标准的 OpenAI 模型字段保持兼容，其余为能力扩展字段，客户端可按需读取。实际数值来自 Pi 的模型列表；推理级别使用与 Pi RPC 相同的能力判断函数，考虑模型的 thinkingLevelMap，不会为每个模型切换会话或改写 Pi 设置。不同客户端可以并发选择不同模型和 effort。
+
+```json
+{
+  "model": "your-provider/your-model",
+  "reasoning_effort": "high",
+  "messages": [{"role": "user", "content": "分析这个项目"}]
+}
 ```
 
 ### 多轮会话
@@ -90,18 +125,18 @@ curl http://127.0.0.1:8787/v1/chat/completions \
   -H 'Authorization: Bearer YOUR_PICALL_KEY' \
   -H 'X-Session-Id: my-project-chat' \
   -H 'Content-Type: application/json' \
-  -d '{"model":"pi","messages":[{"role":"user","content":"继续，运行项目测试"}]}'
+  -d '{"model":"YOUR_PROVIDER/YOUR_MODEL","messages":[{"role":"user","content":"继续，运行项目测试"}]}'
 ```
 
-不带会话 header 的请求每次创建新会话；会话只在服务进程内保留，重启后不恢复。默认最多 8 个会话，空闲 30 分钟回收；达到容量时优先回收最久未用的空闲会话，全部繁忙时返回 `503`。已回收的会话 ID 返回 `409`，需要新 ID。修改模型、effort、context window 或 system prompt 后应新建会话。页面可主动关闭会话。默认请求超时 300 秒，可通过本地配置 API 的 `requestTimeoutSeconds` 调整。
+不带会话 header 的请求每次创建新会话；会话只在服务进程内保留，重启后不恢复。默认最多 8 个会话，空闲 30 分钟回收；达到容量时优先回收最久未用的空闲会话，全部繁忙时返回 `503`。已回收的会话 ID 返回 `409`，需要新 ID。修改模型、显式 reasoning effort 或 system prompt 后应新建会话；续聊省略 reasoning effort 会沿用该会话的初始选择。页面可主动关闭会话。默认请求超时 300 秒，可通过本地配置 API 的 `requestTimeoutSeconds` 调整。
 
 ### 兼容范围
 
 支持文本 `system`、`developer`、`user`、`assistant` 消息、文本 content 数组、`stream`、`stream_options.include_usage`、`n=1`、`reasoning_effort`。system/developer 内容追加到 Pi 自带的 agent system prompt；Pi 的工具和执行能力仍然启用。返回的文本包含本轮 agent 的各次助手文本，工具循环结束后才发出流终止标记。用量累加本轮全部模型调用（包含缓存输入 tokens）。
 
-effort 支持 `off / minimal / low / medium / high / xhigh / max`，以具体模型支持的级别为准。非推理模型请选 `off`；不支持的级别会明确报错。
+请求字段 `reasoning_effort` 可选，接受 Pi 公开的 `off / minimal / low / medium / high / xhigh / max`，以模型返回的 `supported_reasoning_efforts` 为准。OpenAI 的 `none` 映射为 Pi 的 `off`。新会话省略或传 null 时，不向 Pi 传入 thinking 参数，使用 Pi 自身的默认值；不会强加 medium。非推理模型通常只支持 off，不支持的级别返回 400。
 
-context window 留空使用模型默认值；填写数字会通过 Pi 的公开 extension API 设置当前进程的模型上下文预算，影响 Pi 的压缩和上下文管理。它**不会扩大提供商实际允许的上下文长度**，请填写该模型确实支持的值。无论是否自定义，都保留模型原有认证和工具能力。
+上下文窗口是 Pi 模型配置的容量元数据，不是 OpenAI Chat Completions 的标准请求参数。PiCall 返回该信息，不再提供服务端窗口覆盖或改写 Pi 的模型；如需更改模型定义，请在 Pi 的 models.json 中配置。`context_window` / `contextWindow` 请求字段会明确返回 400，避免误以为改变了模型容量。最大输出长度同样作为模型能力返回；当前 RPC 尚未映射逐请求的 max_tokens。
 
 `temperature` 接受 OpenAI 格式的 `0–2` 数字或 `null`，以兼容自动携带该参数的客户端。当前 Pi RPC 不提供逐请求设置 temperature 的命令，因此该字段不会下传，也不会改变 Pi 或上游模型原有的采样设置。
 
@@ -116,7 +151,7 @@ context window 留空使用模型默认值；填写数字会通过 Pi 的公开 
 - Skills / extensions：使用 Pi 支持的目录和 `settings.json` 配置。
 - Pi packages：`picall pi install <package>`，随后创建新 PiCall 会话加载。
 
-页面第一版提供模型、推理、上下文、API key 和会话管理；MCP 和 packages 的安装配置使用 Pi CLI/配置文件。
+管理页提供服务设置、只读模型目录、试运行及会话管理；MCP 和 packages 的安装配置使用 Pi CLI/配置文件。模型、推理强度由真实客户端逐请求指定。
 
 ### 终端 Pi 能联网，试运行却说“没有搜索/浏览工具”？
 
@@ -159,6 +194,12 @@ picall pi --offline
 ```
 
 这会禁用 Pi 的启动网络操作（包括缺失 package 的自动安装），仍允许正常的模型请求。它不屏蔽已安装扩展自行发起的网络操作，也不会删除现有配置。实际全局配置目录受 `PI_CODING_AGENT_DIR` 影响，默认是 `~/.pi/agent`；项目配置位于 `--workdir` 下的 `.pi`。不要公开完整配置文件，其中可能包含凭据。
+
+## 从 0.1.x 升级
+
+0.2.0 移除 PiCall 保存的 model、effort 和 contextWindow。读取旧配置时会忽略这些字段，保留 API key、会话、目录与信任设置；下一次保存服务设置时会清除旧字段。管理 API 不再接受写入模型参数。
+
+调用端必须传入 `/v1/models` 中的真实模型 ID，旧 `model: "pi"` 别名和省略 model 的用法不再支持。试运行的模型和推理选项仅属于页面本次请求，刷新页面后恢复为未指定 effort，不影响其他客户端。
 
 ## 本地运行边界
 

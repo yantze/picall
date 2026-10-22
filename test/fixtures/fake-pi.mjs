@@ -10,17 +10,18 @@ const argument = (flag, fallback) => {
   return index >= 0 ? process.argv[index + 1] : fallback;
 };
 let selectedModel = argument('--model', 'fake/fake-model');
-let thinkingLevel = argument('--thinking', 'medium');
+let thinkingLevel = argument('--thinking', selectedModel === 'fake/plain-model' ? 'off' : 'medium');
 let turn = 0;
 let running = false;
 let pendingTimer;
-const model = () => ({
-  id: selectedModel.startsWith('fake/') ? selectedModel.slice(5) : selectedModel,
+const model = (id = selectedModel.startsWith('fake/') ? selectedModel.slice(5) : selectedModel) => ({
+  id,
   provider: 'fake',
   name: 'Fake Model',
-  contextWindow: Number(process.env.PICALL_CONTEXT_WINDOW) || 32000,
-  maxTokens: 4096,
-  reasoning: true,
+  contextWindow: id === 'plain-model' ? 8192 : 32000,
+  maxTokens: id === 'plain-model' ? 1024 : 4096,
+  reasoning: id !== 'plain-model',
+  ...(id === 'limited-model' ? { thinkingLevelMap: { minimal: null, medium: null, xhigh: 'xhigh' } } : {}),
   input: ['text'],
 });
 const emit = (data) => process.stdout.write(`${JSON.stringify(data)}\n`);
@@ -38,10 +39,11 @@ const message = (text) => ({
 function handle(command) {
   switch (command.type) {
     case 'get_available_models':
-      response(command, { models: [{ ...model(), id: 'fake-model' }] });
+      response(command, { models: ['fake-model', 'plain-model', 'limited-model'].map(id => model(id)) });
       break;
     case 'get_available_thinking_levels':
-      response(command, { levels: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] });
+      response(command, { levels: model().id === 'plain-model' ? ['off'] : model().id === 'limited-model'
+        ? ['off', 'low', 'high', 'xhigh'] : ['off', 'minimal', 'low', 'medium', 'high'] });
       break;
     case 'get_state':
       emit({ type: 'extension_ui_request', method: 'setStatus', statusKey: 'picall_runtime',
@@ -88,8 +90,10 @@ function handle(command) {
           emit({ type: 'agent_settled', messages: [] });
           return;
         }
-        const first = 'Hello';
-        const second = prompt.includes('UNICODE:') ? ' line\u2028paragraph\u2029end' : ` from Pi (turn ${turn})`;
+        const metadata = prompt.includes('REQUEST_METADATA:');
+        const first = metadata ? JSON.stringify({ model: selectedModel, effort: thinkingLevel,
+          explicitEffort: process.argv.includes('--thinking'), contextWindow: model().contextWindow }) : 'Hello';
+        const second = metadata ? '' : prompt.includes('UNICODE:') ? ' line\u2028paragraph\u2029end' : ` from Pi (turn ${turn})`;
         emit({ type: 'message_start', message: message('') });
         emit({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: first }, message: message(first) });
         // An agent_end is not final: Pi can continue after compaction/retries.

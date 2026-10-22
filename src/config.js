@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 export const EFFORTS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 export const PROJECT_TRUST = ['default', 'allow', 'deny'];
 export const DEFAULTS = Object.freeze({
-  host: '127.0.0.1', port: 8787, model: '', effort: 'medium', contextWindow: null,
+  host: '127.0.0.1', port: 8787,
   apiKey: '', workdir: process.cwd(), maxSessions: 8, idleTimeoutMinutes: 30,
   requestTimeoutSeconds: 300, projectTrust: 'default',
 });
@@ -25,10 +25,7 @@ function validate(values) {
   for (const [key, min, max] of [['port', 1, 65535], ['maxSessions', 1, 64], ['idleTimeoutMinutes', 1, 1440], ['requestTimeoutSeconds', 5, 3600]]) {
     if (!Number.isInteger(values[key]) || values[key] < min || values[key] > max) throw appError(`${key} must be an integer between ${min} and ${max}.`);
   }
-  if (typeof values.model !== 'string' || values.model.length > 300 || (values.model && !/^[^\s/]+\/[^\s]+$/.test(values.model))) throw appError('model must use provider/model format.');
-  if (!EFFORTS.includes(values.effort)) throw appError('Unsupported effort.');
   if (!PROJECT_TRUST.includes(values.projectTrust)) throw appError('projectTrust must be default, allow, or deny.');
-  if (values.contextWindow !== null && (!Number.isInteger(values.contextWindow) || values.contextWindow < 1024 || values.contextWindow > 10000000)) throw appError('contextWindow must be null or an integer between 1024 and 10000000.');
   if (typeof values.apiKey !== 'string' || (values.apiKey && (!/^[\x21-\x7e]{8,256}$/.test(values.apiKey)))) throw appError('API key must contain 8–256 visible ASCII characters (or be empty to disable authentication).');
   if (typeof values.workdir !== 'string' || !isAbsolute(values.workdir)) throw appError('workdir must be an absolute path.');
 }
@@ -46,7 +43,10 @@ export class ConfigStore {
     let saved = {};
     try { saved = JSON.parse(await readFile(this.path, 'utf8')); }
     catch (error) { if (error.code !== 'ENOENT') throw new Error(`Cannot read configuration ${this.path}: ${error.message}`); }
-    this.value = { ...DEFAULTS, ...saved, ...this.overrides };
+    if (!saved || typeof saved !== 'object' || Array.isArray(saved)) throw new Error('Saved configuration must be a JSON object.');
+    // Remove legacy gateway model defaults without changing other settings.
+    const { model: _model, effort: _effort, contextWindow: _contextWindow, ...gatewaySettings } = saved;
+    this.value = { ...DEFAULTS, ...gatewaySettings, ...this.overrides };
     validate(this.value);
     return this.value;
   }
@@ -57,7 +57,7 @@ export class ConfigStore {
   update(patch) {
     const operation = this.queue.then(async () => {
       if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw appError('Settings must be a JSON object.');
-      const allowed = ['model', 'effort', 'contextWindow', 'apiKey', 'maxSessions', 'idleTimeoutMinutes', 'requestTimeoutSeconds', 'projectTrust'];
+      const allowed = ['apiKey', 'maxSessions', 'idleTimeoutMinutes', 'requestTimeoutSeconds', 'projectTrust'];
       for (const key of Object.keys(patch)) if (!allowed.includes(key)) throw appError(`Setting is read-only or unknown: ${key}`);
       const next = { ...this.value, ...patch };
       validate(next);

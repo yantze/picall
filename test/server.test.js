@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,7 +19,7 @@ async function setup(t, settings = {}) {
   const dataDir = await mkdtemp(join(tmpdir(), 'picall-test-'));
   const configStore = new ConfigStore({ dataDir, overrides: { workdir: dataDir } });
   await configStore.load();
-  await configStore.update({ model: 'fake/fake-model', ...settings });
+  await configStore.update(settings);
   const logger = new Logger({ dataDir });
   const runtime = new PiRuntime({ getConfig: () => configStore.value, logger,
     command: { file: process.execPath, args: [fakePi] } });
@@ -167,10 +167,10 @@ test('API key protects OpenAI routes while the local management page stays acces
 
 test('cross-origin browser requests cannot mutate local management settings', async (t) => {
   const { request, configStore } = await setup(t);
-  const before = configStore.value.effort;
-  const response = await request('/api/config', { method: 'PUT', body: { effort: 'high' }, headers: { origin: 'https://untrusted.example' } });
+  const before = configStore.value.maxSessions;
+  const response = await request('/api/config', { method: 'PUT', body: { maxSessions: 12 }, headers: { origin: 'https://untrusted.example' } });
   assert.equal(response.status, 403);
-  assert.equal(configStore.value.effort, before);
+  assert.equal(configStore.value.maxSessions, before);
   const key = await request('/api/key', { method: 'POST', headers: { origin: 'https://untrusted.example' } });
   assert.equal(key.status, 403);
   const preflight = await request('/api/config', { method: 'OPTIONS', headers: {
@@ -236,16 +236,16 @@ test('settings persist, invalid updates are atomic, and keys are generated witho
   assert.equal(typeof apiKey, 'string');
   assert.ok(apiKey.length >= 24);
   assert.equal(configStore.value.apiKey, '');
-  const settings = { model: 'fake/fake-model', effort: 'high', contextWindow: 16000, apiKey };
+  const settings = { maxSessions: 12, idleTimeoutMinutes: 20, apiKey };
   const saved = await request('/api/config', { method: 'PUT', body: settings });
   assert.equal(saved.status, 200);
   const publicConfig = await saved.json();
-  assert.equal(publicConfig.effort, 'high');
-  assert.equal(publicConfig.contextWindow, 16000);
+  assert.equal(publicConfig.maxSessions, 12);
+  assert.equal(publicConfig.idleTimeoutMinutes, 20);
   assert.equal(publicConfig.apiKey, undefined);
   const reloaded = new ConfigStore({ dataDir, overrides: { workdir: dataDir } });
   await reloaded.load();
-  assert.equal(reloaded.value.effort, 'high');
+  assert.equal(reloaded.value.maxSessions, 12);
   assert.equal(reloaded.value.apiKey, apiKey);
   const before = await readFile(configStore.path, 'utf8');
   for (const body of [{ effort: 'unlimited' }, { contextWindow: -10 }, { port: 9000 }, { apiKey: 'tiny' }]) {
@@ -279,7 +279,7 @@ test('the log event stream publishes new operational records', async (t) => {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let wire = decoder.decode((await reader.read()).value);
-  const saved = await request('/api/config', { method: 'PUT', body: { effort: 'high' } });
+  const saved = await request('/api/config', { method: 'PUT', body: { maxSessions: 12 } });
   assert.equal(saved.status, 200);
   while (!wire.includes('event: log')) wire += decoder.decode((await reader.read()).value);
   assert.match(wire, /Settings saved/);
@@ -381,6 +381,111 @@ test('project trust defaults safely, persists valid decisions and rejects unknow
     assert.equal(await readFile(configStore.path, 'utf8'), before);
     assert.equal(configStore.value.projectTrust, 'default');
   }
+});
+
+test('model discovery exposes Pi capabilities and model retrieval without a synthetic default', async (t) => {
+  const { request } = await setup(t);
+  const { data } = await (await request('/v1/models')).json();
+  assert.equal(data.length, 3);
+  assert.ok(!data.some(model => model.id === 'pi'));
+  const plain = data.find(model => model.id === 'fake/plain-model');
+  assert.equal(plain.object, 'model');
+  assert.equal(plain.context_window, 8192);
+  assert.equal(plain.max_output_tokens, 1024);
+  assert.equal(plain.reasoning, false);
+  assert.deepEqual(plain.supported_reasoning_efforts, ['off']);
+  assert.deepEqual(plain.input_modalities, ['text']);
+  const limited = data.find(model => model.id === 'fake/limited-model');
+  assert.deepEqual(limited.supported_reasoning_efforts, ['off', 'low', 'high', 'xhigh']);
+  for (const id of ['fake/plain-model', 'fake%2Fplain-model']) {
+    const response = await request(`/v1/models/${id}`);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), plain);
+  }
+  const absent = await request('/v1/models/fake/missing');
+  assert.equal(absent.status, 404);
+  assert.equal((await absent.json()).error.code, 'model_not_found');
+});
+
+test('separate clients select models and effort without gateway model defaults', async (t) => {
+  const { request, configStore } = await setup(t);
+  const choices = [
+    { model: 'fake/fake-model', reasoning_effort: 'high', expected: 'high' },
+    { model: 'fake/fake-model', reasoning_effort: 'low', expected: 'low' },
+    { model: 'fake/plain-model', reasoning_effort: 'none', expected: 'off' },
+  ];
+  const results = await Promise.all(choices.map(async ({ expected, ...params }) => {
+    const response = await request('/v1/chat/completions', { method: 'POST', body: completion('REQUEST_METADATA:', params) });
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.equal(result.model, params.model);
+    const actual = JSON.parse(result.choices[0].message.content);
+    assert.equal(actual.model, params.model);
+    assert.equal(actual.effort, expected);
+    assert.equal(actual.explicitEffort, true);
+    return actual;
+  }));
+  assert.equal(results[2].contextWindow, 8192);
+  for (const name of ['model', 'effort', 'contextWindow']) assert.equal(Object.hasOwn(configStore.value, name), false);
+});
+
+test('omitted effort uses Pi defaults and continued sessions retain initial effort', async (t) => {
+  const { request } = await setup(t);
+  const defaultResponse = await request('/v1/chat/completions', { method: 'POST', body: completion('REQUEST_METADATA:', { model: 'fake/plain-model' }) });
+  assert.equal(defaultResponse.status, 200);
+  assert.deepEqual(JSON.parse((await defaultResponse.json()).choices[0].message.content),
+    { model: 'fake/plain-model', effort: 'off', explicitEffort: false, contextWindow: 8192 });
+  const first = await request('/v1/chat/completions', { method: 'POST', body: completion('REQUEST_METADATA:', { reasoning_effort: 'high' }) });
+  assert.equal(first.status, 200);
+  await first.json();
+  const headers = { 'x-session-id': first.headers.get('x-session-id') };
+  const next = await request('/v1/chat/completions', { method: 'POST', headers, body: completion('REQUEST_METADATA:') });
+  assert.equal(next.status, 200);
+  assert.equal(JSON.parse((await next.json()).choices[0].message.content).effort, 'high');
+  const conflict = await request('/v1/chat/completions', { method: 'POST', headers, body: completion('Hello', { reasoning_effort: 'low' }) });
+  assert.equal(conflict.status, 409);
+});
+
+test('request selection rejects missing models and unsupported effort levels', async (t) => {
+  const { request, runtime } = await setup(t);
+  for (const body of [
+    { messages: [{ role: 'user', content: 'hello' }] },
+    completion('hello', { model: 'pi' }),
+    completion('hello', { model: 'fake/plain-model', reasoning_effort: 'high' }),
+    completion('hello', { model: 'fake/limited-model', reasoning_effort: 'medium' }),
+    completion('hello', { reasoning_effort: 'xhigh' }),
+    completion('hello', { context_window: 64000 }),
+  ]) assert.equal((await request('/v1/chat/completions', { method: 'POST', body })).status, 400);
+  assert.equal(runtime.list().length, 0);
+});
+
+test('legacy defaults migrate out without changing keys or overriding client requests', async (t) => {
+  const { request, configStore } = await setup(t);
+  const legacy = { ...configStore.value, model: 'fake/missing', effort: 'high', contextWindow: 1024,
+    apiKey: 'pc-legacy-auth-key', maxSessions: 10 };
+  const contents = JSON.stringify(legacy);
+  await writeFile(configStore.path, contents, { mode: 0o600 });
+  await configStore.load();
+  assert.equal(await readFile(configStore.path, 'utf8'), contents);
+  const config = await (await request('/api/config')).json();
+  for (const name of ['model', 'effort', 'contextWindow', 'apiKey']) assert.equal(Object.hasOwn(config, name), false);
+  assert.equal(config.maxSessions, 10);
+  assert.equal(config.apiKeyConfigured, true);
+  const response = await request('/v1/chat/completions', { method: 'POST',
+    headers: { authorization: 'Bearer pc-legacy-auth-key' }, body: completion('REQUEST_METADATA:') });
+  assert.equal(response.status, 200);
+  const metadata = JSON.parse((await response.json()).choices[0].message.content);
+  assert.equal(metadata.model, 'fake/fake-model');
+  assert.equal(metadata.effort, 'medium');
+  assert.equal(metadata.explicitEffort, false);
+  assert.equal(metadata.contextWindow, 32000);
+  for (const patch of [{ model: 'fake/plain-model' }, { effort: 'high' }, { contextWindow: 16000 }]) {
+    assert.equal((await request('/api/config', { method: 'PUT', body: patch })).status, 400);
+  }
+  await configStore.update({ maxSessions: 12 });
+  const persisted = JSON.parse(await readFile(configStore.path, 'utf8'));
+  assert.equal(persisted.apiKey, legacy.apiKey);
+  for (const name of ['model', 'effort', 'contextWindow']) assert.equal(Object.hasOwn(persisted, name), false);
 });
 
 test('changing project trust requires a fresh session rather than retaining earlier loaded project tools', { timeout: 10_000 }, async (t) => {

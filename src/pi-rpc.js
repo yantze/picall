@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
+import { getSupportedThinkingLevels } from '@earendil-works/pi-ai/compat';
 
 const extensionPath = fileURLToPath(new URL('./extensions/runtime.mjs', import.meta.url));
 const MAX_RECORD_BYTES = 16 * 1024 * 1024;
@@ -33,6 +34,10 @@ function copySnapshot(value) {
   return { ...value, tools: [...value.tools], availableTools: [...value.availableTools] };
 }
 
+function copyModel(value) {
+  return { ...value, reasoningEfforts: [...value.reasoningEfforts], input: [...value.input] };
+}
+
 function failure(message, status = 502, code = 'pi_error') {
   return Object.assign(new Error(message), { status, code });
 }
@@ -44,7 +49,7 @@ function bundledCommand() {
 }
 
 class RpcWorker extends EventEmitter {
-  constructor(command, { cwd, model, effort, contextWindow, systemPrompt, projectTrust, logger }) {
+  constructor(command, { cwd, model, effort, systemPrompt, projectTrust, logger }) {
     super();
     this.pending = new Map();
     this.sequence = 0;
@@ -62,7 +67,7 @@ class RpcWorker extends EventEmitter {
     if (systemPrompt) args.push('--append-system-prompt', systemPrompt);
     this.child = spawn(command.file, args, {
       cwd,
-      env: { ...process.env, PI_SKIP_VERSION_CHECK: '1', PICALL_CONTEXT_WINDOW: contextWindow ? String(contextWindow) : '' },
+      env: { ...process.env, PI_SKIP_VERSION_CHECK: '1' },
       stdio: ['pipe', 'pipe', 'pipe'],
       detached: process.platform !== 'win32',
       windowsHide: true,
@@ -210,10 +215,9 @@ export class PiRuntime {
 
   getCommand() { return this.command || bundledCommand(); }
 
-  probeKey(includeModel = false) {
+  probeKey() {
     const config = this.getConfig();
-    return JSON.stringify({ ...runtimeContext(config.workdir || process.cwd(), this.command), projectTrust: config.projectTrust || 'default',
-      ...(includeModel ? { model: config.model || '', effort: config.effort || 'medium', contextWindow: config.contextWindow ?? null } : {}) });
+    return JSON.stringify({ ...runtimeContext(config.workdir || process.cwd(), this.command), projectTrust: config.projectTrust || 'default' });
   }
 
   enqueueProbe(task) {
@@ -223,7 +227,7 @@ export class PiRuntime {
   }
 
   async check() {
-    const key = this.probeKey(true);
+    const key = this.probeKey();
     if (this.checkCache?.key === key && Date.now() - this.checkCache.at < 30_000) return copySnapshot(this.checkCache.value);
     if (this.checkInFlight?.key === key) return copySnapshot(await this.checkInFlight.promise);
     const promise = this.enqueueProbe(() => this.performCheck()).then((value) => {
@@ -242,8 +246,7 @@ export class PiRuntime {
       if (this.closed) throw failure('Pi runtime is shutting down.', 503, 'runtime_closed');
       const command = this.getCommand();
       version = command.packagePath ? JSON.parse(await readFile(command.packagePath, 'utf8')).version : 'custom';
-      const config = this.getConfig();
-      worker = this.createWorker({ model: config.model || '', effort: config.effort || 'medium', contextWindow: config.contextWindow ?? null });
+      worker = this.createWorker({});
       this.probeWorkers.add(worker);
       await worker.send({ type: 'get_state' });
       worker.assertMetadata();
@@ -260,14 +263,14 @@ export class PiRuntime {
 
   async models() {
     const key = this.probeKey();
-    if (this.modelsCache?.key === key && Date.now() - this.modelsCache.at < 10_000) return this.modelsCache.value.map((model) => ({ ...model }));
-    if (this.modelsInFlight?.key === key) return (await this.modelsInFlight.promise).map((model) => ({ ...model }));
+    if (this.modelsCache?.key === key && Date.now() - this.modelsCache.at < 10_000) return this.modelsCache.value.map(copyModel);
+    if (this.modelsInFlight?.key === key) return (await this.modelsInFlight.promise).map(copyModel);
     const promise = this.enqueueProbe(() => this.performModels()).then((value) => {
       this.modelsCache = { key, at: Date.now(), value };
       return value;
     }).finally(() => { if (this.modelsInFlight?.promise === promise) this.modelsInFlight = null; });
     this.modelsInFlight = { key, promise };
-    return (await promise).map((model) => ({ ...model }));
+    return (await promise).map(copyModel);
   }
 
   async performModels() {
@@ -282,7 +285,12 @@ export class PiRuntime {
         provider: model.provider,
         name: model.name || model.id,
         contextWindow: model.contextWindow,
+        maxTokens: model.maxTokens ?? null,
         reasoning: Boolean(model.reasoning),
+        // Same helper as Pi's get_available_thinking_levels RPC, without
+        // changing its current model or writing its saved settings.
+        reasoningEfforts: getSupportedThinkingLevels(model),
+        input: Array.isArray(model.input) ? [...model.input] : [],
       }));
     } finally { await worker?.close(); this.probeWorkers.delete(worker); }
   }
@@ -290,17 +298,16 @@ export class PiRuntime {
   async acquire(options = {}) {
     if (this.closed) throw failure('Pi runtime is shutting down.', 503, 'runtime_closed');
     const config = this.getConfig();
+    const id = options.sessionId || randomUUID();
+    const existing = this.sessions.get(id);
     const settings = {
-      model: options.model ?? config.model ?? '',
-      effort: options.effort ?? config.effort ?? 'medium',
-      contextWindow: options.contextWindow ?? config.contextWindow ?? null,
+      model: options.model ?? existing?.settings.model ?? '',
+      effort: options.effort ?? existing?.settings.effort ?? null,
       systemPrompt: options.systemPrompt || '',
       workdir: config.workdir || process.cwd(),
       projectTrust: config.projectTrust || 'default',
     };
-    const id = options.sessionId || randomUUID();
     if (this.retiredIds.has(id)) throw failure('This session has expired or was closed. Use a new session ID to start a conversation.', 409, 'session_expired');
-    const existing = this.sessions.get(id);
     if (existing) {
       if (existing.busy) throw failure('This session is already processing a request.', 409, 'session_busy');
       if (existing.worker.closed) {
@@ -308,7 +315,7 @@ export class PiRuntime {
         throw failure('This Pi session has exited; start a new session.', 409, 'session_expired');
       }
       if (JSON.stringify(existing.settings) !== JSON.stringify(settings)) {
-        throw failure('Model, effort, context window, system prompt, working directory, or project trust changed. Start a new session.', 409, 'session_configuration_changed');
+        throw failure('Model, effort, system prompt, working directory, or project trust changed. Start a new session.', 409, 'session_configuration_changed');
       }
       existing.busy = true;
       existing.lastUsedAt = Date.now();
@@ -345,12 +352,9 @@ export class PiRuntime {
       if (!state?.model) throw failure('Pi has no available model. Configure a provider with pi /login or its API-key environment variable.', 503, 'model_unavailable');
       session.model = `${state.model.provider}/${state.model.id}`;
       if (settings.model && session.model !== settings.model) throw failure(`Pi selected ${session.model} instead of the requested ${settings.model}. Use a model ID from /v1/models.`, 400, 'model_unavailable');
-      if (settings.contextWindow && state.model.contextWindow !== settings.contextWindow) throw failure('Pi did not apply the configured context window.', 502, 'context_window_not_applied');
       const levels = await session.worker.send({ type: 'get_available_thinking_levels' });
-      if (levels?.levels && !levels.levels.includes(settings.effort)) throw failure(`This model does not support effort ${settings.effort}. Supported: ${levels.levels.join(', ')}.`, 400, 'unsupported_effort');
-      if (state.thinkingLevel && state.thinkingLevel !== settings.effort) {
-        await session.worker.send({ type: 'set_thinking_level', level: settings.effort });
-      }
+      if (settings.effort !== null && levels?.levels && !levels.levels.includes(settings.effort)) throw failure(`This model does not support effort ${settings.effort}. Supported: ${levels.levels.join(', ')}.`, 400, 'unsupported_effort');
+      if (settings.effort !== null && state.thinkingLevel !== settings.effort) throw failure('Pi did not apply the requested reasoning effort.', 502, 'effort_not_applied');
       this.logger?.log('info', 'Pi session created.', { sessionId: id, model: session.model });
       return session;
     } catch (error) {

@@ -11,13 +11,7 @@ function toolNames(values) {
 // or modifying user files. RPC's public UI status channel preserves JSONL output
 // ordering; Pi redirects ordinary process.stdout.write calls to stderr.
 export default function picallRuntimeExtension(pi) {
-  const contextWindow = Number(process.env.PICALL_CONTEXT_WINDOW);
   const report = async (_event, ctx) => {
-    if (Number.isSafeInteger(contextWindow) && contextWindow > 0 && ctx.model &&
-        ctx.model.contextWindow !== contextWindow) {
-      const changed = await pi.setModel({ ...ctx.model, contextWindow });
-      if (!changed) throw new Error('Picall could not apply the context window to this model.');
-    }
     ctx.ui.setStatus('picall_runtime', JSON.stringify({
       activeTools: toolNames(pi.getActiveTools()),
       availableTools: toolNames(pi.getAllTools().map((tool) => tool.name)),

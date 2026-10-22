@@ -6,7 +6,7 @@ import { PiRuntime } from '../src/pi-rpc.js';
 const fakePi = fileURLToPath(new URL('./fixtures/fake-pi.mjs', import.meta.url));
 
 function createRuntime(t, overrides = {}, options = {}) {
-  const config = { workdir: process.cwd(), model: 'fake/fake-model', effort: 'medium', contextWindow: null,
+  const config = { workdir: process.cwd(),
     maxSessions: 8, idleTimeoutMinutes: 30, requestTimeoutSeconds: 5, ...overrides };
   const runtime = new PiRuntime({ getConfig: () => config, command: { file: process.execPath, args: [fakePi] }, ...options });
   t.after(() => runtime.close());
@@ -52,7 +52,7 @@ test('model failures produce errors rather than successful empty completions', a
 });
 
 test('capacity rejects busy sessions, evicts idle sessions and preserves expired-session identity', async (t) => {
-  const runtime = createRuntime(t, { maxSessions: 1, contextWindow: 16000 });
+  const runtime = createRuntime(t, { maxSessions: 1 });
   const session = await runtime.acquire({ sessionId: 'retained' });
   await assert.rejects(runtime.acquire({ sessionId: 'another' }), (error) => error.code === 'session_limit');
   await session.run('Hello');

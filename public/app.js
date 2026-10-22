@@ -46,18 +46,17 @@ function showView(view, updateUrl = true) {
 }
 
 function updateCurl() {
-  const body = { model: 'pi', messages: [{ role: 'user', content: 'Hello, Pi!' }], stream: true };
+  const body = { model: $('model').value || 'provider/model', messages: [{ role: 'user', content: 'Hello, Pi!' }], stream: true };
+  if ($('effort').value) body.reasoning_effort = $('effort').value;
   const lines = [`curl ${baseUrl()}/chat/completions \\`, '  -H "Content-Type: application/json" \\'];
   if (state.config?.apiKeyConfigured) lines.push('  -H "Authorization: Bearer YOUR_API_KEY" \\');
-  lines.push(`  -d '${JSON.stringify(body, null, 2)}'`);
+  const quotedBody = "'" + JSON.stringify(body, null, 2).replaceAll("'", "'\\''") + "'";
+  lines.push(`  -d ${quotedBody}`);
   $('curl-example').textContent = lines.join('\n');
 }
 
 function applyConfig(config) {
   state.config = config;
-  $('model').value = config.model || '';
-  $('effort').value = config.effort || 'medium';
-  $('context-window').value = config.contextWindow ?? '';
   $('max-sessions').value = config.maxSessions ?? 8;
   $('idle-timeout').value = config.idleTimeoutMinutes ?? 30;
   $('workdir').value = config.workdir || '';
@@ -210,16 +209,28 @@ async function loadModels(userTriggered = false) {
   $('reload-models').disabled = true;
   try {
     const result = await api('/api/models');
+    const selected = $('model').value;
+    const selectedEffort = $('effort').value;
     state.models = result.models || [];
     const fragment = document.createDocumentFragment();
     state.models.forEach((model) => {
       const option = document.createElement('option');
       option.value = model.id;
-      option.label = `${model.name || model.id}${model.contextWindow ? ` · ${Math.round(model.contextWindow / 1000)}k` : ''}`;
+      option.textContent = `${model.id}${model.contextWindow ? ` · ${Math.round(model.contextWindow / 1000)}k` : ''}`;
       fragment.append(option);
     });
-    $('model-options').replaceChildren(fragment);
-    $('model-help').textContent = result.error || (state.models.length ? `${state.models.length} 个可用模型。也可手动输入 provider/model。` : '暂无可用模型。请先通过 pi 完成模型认证，再刷新。');
+    if (!state.models.length) {
+      const empty = document.createElement('option');
+      empty.value = ''; empty.textContent = '暂无可用模型'; fragment.append(empty);
+    }
+    $('model').replaceChildren(fragment);
+    if (state.models.some(model => model.id === selected)) $('model').value = selected;
+    if ($('model').value !== selected) state.sessionId = null;
+    $('model-count').textContent = String(state.models.length);
+    $('model-help').textContent = result.error || (state.models.length ? `${state.models.length} 个 Pi 可用模型。此处只读展示，不设置服务默认模型。` : '暂无可用模型。请先通过 picall pi 完成模型认证，再刷新。');
+    renderModelCatalog();
+    updateRequestModel();
+    if ($('effort').value !== selectedEffort) state.sessionId = null;
     if (userTriggered) toast(result.error || `已加载 ${state.models.length} 个模型`, !!result.error);
   } catch (error) {
     $('model-help').textContent = error.message;
@@ -229,14 +240,46 @@ async function loadModels(userTriggered = false) {
   }
 }
 
+function renderModelCatalog() {
+  const fragment = document.createDocumentFragment();
+  for (const model of state.models) {
+    const row = document.createElement('article'); row.className = 'model-entry'; row.setAttribute('role', 'listitem');
+    const id = document.createElement('code'); id.textContent = model.id;
+    const name = document.createElement('p'); name.className = 'model-entry-name'; name.textContent = model.name || model.id;
+    const details = document.createElement('p'); details.className = 'model-entry-meta';
+    details.textContent = `上下文 ${formatTokens(model.contextWindow)} · 最大输出 ${formatTokens(model.maxTokens)}`;
+    const efforts = document.createElement('p'); efforts.className = 'model-entry-efforts';
+    efforts.textContent = `推理级别：${model.reasoningEfforts?.join(' / ') || '未报告'}`;
+    row.append(id, name, details, efforts); fragment.append(row);
+  }
+  $('model-catalog').replaceChildren(fragment);
+}
+
+function formatTokens(value) {
+  return Number.isFinite(value) ? `${value.toLocaleString()} tokens` : '未报告';
+}
+
+function updateRequestModel() {
+  const selected = state.models.find(model => model.id === $('model').value);
+  const previous = $('effort').value;
+  const defaultOption = document.createElement('option'); defaultOption.value = ''; defaultOption.textContent = 'Pi 默认 · 不发送';
+  const options = [defaultOption];
+  for (const effort of selected?.reasoningEfforts || []) {
+    const option = document.createElement('option'); option.value = effort; option.textContent = effort; options.push(option);
+  }
+  $('effort').replaceChildren(...options);
+  if ((selected?.reasoningEfforts || []).includes(previous)) $('effort').value = previous;
+  $('request-model-info').textContent = selected
+    ? `Pi 模型上限：上下文 ${formatTokens(selected.contextWindow)} · 最大输出 ${formatTokens(selected.maxTokens)}。上下文窗口由 Pi 的模型配置决定。`
+    : '先配置 Pi 的模型认证，再刷新模型目录。';
+  updateCurl();
+}
+
 async function saveConfig(event) {
   event.preventDefault();
   if (state.controller) { toast('请等待本轮完成或停止后，再保存设置。', true); return; }
   $('save-button').disabled = true;
   const patch = {
-    model: $('model').value.trim(),
-    effort: $('effort').value,
-    contextWindow: $('context-window').value ? Number($('context-window').value) : null,
     maxSessions: Number($('max-sessions').value),
     idleTimeoutMinutes: Number($('idle-timeout').value),
     projectTrust: $('project-trust').value,
@@ -419,6 +462,7 @@ async function runPrompt(event) {
   const prompt = $('prompt').value.trim();
   if (!prompt) return;
   if (!state.config) { toast('服务配置尚未加载，请稍后重试。', true); return; }
+  if (!$('model').value) { toast('请先选择本次请求的模型。', true); return; }
   if (state.config.apiKeyConfigured && !$('api-key').value) {
     toast('请在 API Key 输入框填写当前密钥后试运行。密钥不会由服务端返回。', true);
     $('api-key').focus();
@@ -430,6 +474,9 @@ async function runPrompt(event) {
   $('run-button').disabled = true;
   $('new-session').disabled = true;
   $('save-button').disabled = true;
+  $('model').disabled = true;
+  $('effort').disabled = true;
+  $('reload-models').disabled = true;
   $('response-box').hidden = false;
   $('stop-button').hidden = false;
   $('response-output').textContent = '';
@@ -440,7 +487,9 @@ async function runPrompt(event) {
   const started = performance.now();
   let outcome = 'error';
   try {
-    const response = await fetch('/v1/chat/completions', { method: 'POST', headers, signal: state.controller.signal, body: JSON.stringify({ model: state.config.model || 'pi', messages: [{ role: 'user', content: prompt }], stream: true, stream_options: { include_usage: true } }) });
+    const request = { model: $('model').value, messages: [{ role: 'user', content: prompt }], stream: true, stream_options: { include_usage: true } };
+    if ($('effort').value) request.reasoning_effort = $('effort').value;
+    const response = await fetch('/v1/chat/completions', { method: 'POST', headers, signal: state.controller.signal, body: JSON.stringify(request) });
     if (!response.ok) {
       const error = await response.json();
       throw new Error(error.error?.message || `请求失败 (${response.status})`);
@@ -488,6 +537,9 @@ async function runPrompt(event) {
     $('run-button').disabled = false;
     $('new-session').disabled = false;
     $('save-button').disabled = false;
+    $('model').disabled = false;
+    $('effort').disabled = false;
+    $('reload-models').disabled = false;
     $('stop-button').hidden = true;
     void Promise.all([loadStatus(), loadSessions()]);
   }
@@ -497,6 +549,8 @@ document.querySelectorAll('[data-view]').forEach((button) => button.addEventList
 window.addEventListener('popstate', () => showView(new URL(location.href).searchParams.get('tab') === 'logs' ? 'logs' : 'overview', false));
 $('config-form').addEventListener('submit', saveConfig);
 $('reload-models').addEventListener('click', () => loadModels(true));
+$('model').addEventListener('change', () => { state.sessionId = null; updateRequestModel(); });
+$('effort').addEventListener('change', () => { state.sessionId = null; updateCurl(); });
 $('project-trust').addEventListener('change', updateProjectTrustHelp);
 $('refresh-tools').addEventListener('click', async () => {
   $('refresh-tools').disabled = true;

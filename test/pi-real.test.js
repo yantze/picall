@@ -1,14 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PiRuntime } from '../src/pi-rpc.js';
 
 // Exercise the installed Pi executable and its actual tool loop without a paid
 // provider or a user's credentials. Only the upstream model transport is fake.
-test('bundled Pi applies context/effort and executes a complete tool loop', { timeout: 45_000 }, async () => {
+test('bundled Pi applies request effort, retains model context and executes a complete tool loop', { timeout: 45_000 }, async () => {
   const profile = await mkdtemp(join(tmpdir(), 'picall-real-pi-'));
   const previousProfile = process.env.PI_CODING_AGENT_DIR;
   const calls = [];
@@ -51,17 +51,24 @@ test('bundled Pi applies context/effort and executes a complete tool loop', { ti
         maxTokens: 1024, reasoning: true, input: ['text'],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }],
     } } }), { mode: 0o600 });
+    const savedSettings = JSON.stringify({ defaultProvider: 'picall-test', defaultModel: 'rpc-test', defaultThinkingLevel: 'low' });
+    await writeFile(join(profile, 'settings.json'), savedSettings, { mode: 0o600 });
     process.env.PI_CODING_AGENT_DIR = profile;
     const events = [];
     runtime = new PiRuntime({
-      getConfig: () => ({ workdir: tmpdir(), model: 'picall-test/rpc-test', effort: 'medium', contextWindow: 32_000, requestTimeoutSeconds: 30 }),
+      getConfig: () => ({ workdir: tmpdir(), requestTimeoutSeconds: 30 }),
       logger: { log: (_level, message, details) => events.push({ message, details }) },
     });
     assert.equal((await runtime.check()).available, true);
-    assert.ok((await runtime.models()).some((model) => model.id === 'picall-test/rpc-test'));
-    const session = await runtime.acquire({ systemPrompt: 'Picall integration marker: preserve the agent tools.' });
+    const models = await runtime.models();
+    const capabilities = models.find(model => model.id === 'picall-test/rpc-test');
+    assert.equal(capabilities.contextWindow, 128_000);
+    assert.equal(capabilities.maxTokens, 1024);
+    assert.deepEqual(capabilities.reasoningEfforts, ['off', 'minimal', 'low', 'medium', 'high']);
+    assert.equal(await readFile(join(profile, 'settings.json'), 'utf8'), savedSettings);
+    const session = await runtime.acquire({ model: 'picall-test/rpc-test', effort: 'medium', systemPrompt: 'Picall integration marker: preserve the agent tools.' });
     const state = await session.worker.send({ type: 'get_state' });
-    assert.equal(state.model.contextWindow, 32_000);
+    assert.equal(state.model.contextWindow, 128_000);
     assert.equal(state.thinkingLevel, 'medium');
     assert.ok(session.snapshot.tools.includes('bash'));
     assert.ok(session.snapshot.availableTools.includes('bash'));
@@ -82,6 +89,7 @@ test('bundled Pi applies context/effort and executes a complete tool loop', { ti
     assert.ok(!JSON.stringify(toolEvents).includes('picall-real-tool-ok'));
     assert.ok(!JSON.stringify(events).includes('picall-real-tool-ok'));
     assert.equal(session.busy, false);
+    assert.equal(await readFile(join(profile, 'settings.json'), 'utf8'), savedSettings, 'per-request selection must not change Pi defaults');
   } finally {
     await runtime?.close();
     server.closeAllConnections();
@@ -114,7 +122,7 @@ test('project tools are only loaded after explicit trust and diagnostics follow 
         reasoning: false, input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }],
     } } }), { mode: 0o600 });
     process.env.PI_CODING_AGENT_DIR = profile;
-    const config = { workdir, model: 'picall-test/trust-test', effort: 'off', projectTrust: 'default', requestTimeoutSeconds: 15 };
+    const config = { workdir, projectTrust: 'default', requestTimeoutSeconds: 15 };
     runtime = new PiRuntime({ getConfig: () => config });
     for (const projectTrust of ['default', 'allow', 'deny', 'default']) {
       config.projectTrust = projectTrust;
@@ -127,7 +135,7 @@ test('project tools are only loaded after explicit trust and diagnostics follow 
       assert.ok(diagnostic.availableTools.includes('bash'));
       assert.equal(diagnostic.tools.includes('web_probe'), projectTrust === 'allow', `${projectTrust}: active tools`);
       assert.equal(diagnostic.availableTools.includes('web_probe'), projectTrust === 'allow', `${projectTrust}: available tools`);
-      const session = await runtime.acquire({});
+      const session = await runtime.acquire({ model: 'picall-test/trust-test', effort: 'off' });
       assert.equal(session.snapshot.workdir, workdir);
       assert.equal(session.snapshot.agentDir, profile);
       assert.equal(typeof session.snapshot.offlineStartup, 'boolean');
