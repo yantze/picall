@@ -33,10 +33,10 @@ picall --workdir /absolute/path/to/your/project
 ```bash
 npm ci
 npm start -- --workdir /absolute/path/to/your/project
-# 或 npm pack 后 npm install -g ./yantze-picall-0.5.0.tgz
+# 或 npm pack 后 npm install -g ./yantze-picall-0.5.1.tgz
 ```
 
-启动后打开终端输出的本地管理地址，默认端口 **8787**。管理页保存 API key、会话和项目设置；Pi 模型目录只读展示能力。试运行页作为一个客户端，选择仅用于本次请求的模型和推理强度，不保存为服务默认值。日志入口可在新标签页中打开。
+启动后打开终端输出的本地管理地址，默认端口 **8787**。左侧“服务设置”独立管理配置，包含“服务配置”“工具策略”“Pi 扩展”三个标签页，共用保存按钮；切换页面或标签不会清空待保存的选择。服务概览保留只读模型目录、试运行和会话。试运行作为一个客户端，选择仅用于本次请求的模型和推理强度，不保存为服务默认值。日志入口可在新标签页中打开。
 
 显式指定 `--workdir` 即视为信任该项目，自动加载其 Pi 项目配置、扩展和 MCP，无需额外信任参数。
 
@@ -134,7 +134,7 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 
 ### 保存 Pi 原生会话
 
-默认不保存请求正文。启动时增加 `--save-sessions`，或在管理页“会话与运行目录”中开启“保存 Pi 会话到磁盘”：
+默认不保存请求正文。启动时增加 `--save-sessions`，或在“服务设置 → 服务配置 → 会话与运行目录”中开启“保存 Pi 会话到磁盘”：
 
 ```bash
 picall --workdir /path/to/project --save-sessions
@@ -190,7 +190,7 @@ picall --workdir /path/to/project --save-sessions
 
 ### 工具与 Extensions 开关
 
-在服务设置中展开“工具与扩展”，可以逐项允许或关闭工具，并单独选择要加载的扩展。保存后新会话生效；复用旧 `X-Session-Id` 会返回 `409 session_configuration_changed`，管理页会自动开始新会话。
+在左侧“服务设置”中，使用“工具策略”标签逐项允许或关闭工具，使用“Pi 扩展”标签选择要加载的扩展。保存后新会话生效；复用旧 `X-Session-Id` 会返回 `409 session_configuration_changed`，管理页会自动开始新会话。
 
 - **默认关闭写入和命令执行工具**，包括 `write`、`edit`、`bash`、`powershell`、`codemode`，以及名称明确表示修改数据、执行命令，或 annotations 声明会修改数据的工具。普通读取、搜索及未分类扩展工具默认允许；页面显示每项的默认状态和判断原因，可手动覆盖。关闭项的模型声明会被过滤，实际调用也会被拦截，包括组合工具发起的嵌套调用。工具的“允许调用”和“模型直出”分别显示，保留 Pi 原生 deferred/codemode/hidden 行为。
 - **Extensions 默认开启**，遵循 Pi 原来已启用的扩展；可通过总开关关闭全部扩展，也可按路径或 `builtin:` 名称单独开关。单项关闭会在模块加载前排除该扩展。PiCall 用于工具策略和诊断的内部 runtime 始终保留；关闭扩展总开关也会关闭 MCP、codemode 等 Pi 内置扩展。扩展清单的路径发现不会导入模块或安装缺失包；工具清单探测会启动配置允许的扩展。
@@ -203,7 +203,7 @@ picall --workdir /path/to/project --save-sessions
 
 ### Skills 加载开关
 
-服务默认关闭 Skills，启动 Pi RPC 时传入原生 `--no-skills`。旧配置没有该字段时也默认关闭。在管理页“会话与运行目录”中开启“加载 Pi Skills”并保存后，新会话会按 Pi 的配置自动加载 Skills；项目 Skills 仍遵循项目信任设置。
+服务默认关闭 Skills，启动 Pi RPC 时传入原生 `--no-skills`。旧配置没有该字段时也默认关闭。在“服务设置 → 服务配置 → 会话与运行目录”中开启“加载 Pi Skills”并保存后，新会话会按 Pi 的配置自动加载 Skills；项目 Skills 仍遵循项目信任设置。
 
 管理 API `PUT /api/config` 使用布尔字段 `enableSkills`。启动参数可覆盖保存的设置：
 

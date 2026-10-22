@@ -3,7 +3,7 @@
 const $ = (id) => document.getElementById(id);
 const state = { config: null, status: null, models: [], logs: [], seenLogs: new Set(), paused: false, sessionId: null, controller: null, eventSource: null, toastTimer: null, logFloor: 0, latestLogTime: '', logConnected: false, toolRun: null,
   capabilityTools: null, capabilityExtensions: null, capabilityError: '', capabilityRequest: 0,
-  toolOverrides: Object.create(null), extensionOverrides: Object.create(null) };
+  toolOverrides: Object.create(null), extensionOverrides: Object.create(null), currentView: 'overview', settingsSection: 'general' };
 
 function cloneOverrides(value) {
   const result = Object.create(null);
@@ -45,18 +45,46 @@ async function copy(value, description) {
   }
 }
 
-function showView(view, updateUrl = true) {
-  const isLogs = view === 'logs';
-  $('overview-view').hidden = isLogs;
-  $('logs-view').hidden = !isLogs;
-  $('breadcrumb-current').textContent = isLogs ? '实时日志' : '服务概览';
-  document.querySelectorAll('[data-view]').forEach((button) => button.classList.toggle('active', button.dataset.view === view));
-  if (updateUrl) {
-    const url = new URL(location.href);
-    if (isLogs) url.searchParams.set('tab', 'logs'); else url.searchParams.delete('tab');
-    history.pushState({}, '', url);
-  }
-  if (isLogs) renderLogs();
+function writeRoute() {
+  const url = new URL(location.href);
+  if (state.currentView === 'overview') url.searchParams.delete('tab');
+  else url.searchParams.set('tab', state.currentView);
+  if (state.currentView === 'settings' && state.settingsSection !== 'general') url.searchParams.set('section', state.settingsSection);
+  else url.searchParams.delete('section');
+  if (url.href !== location.href) history.pushState({}, '', url);
+}
+
+function showSettingsTab(section, updateUrl = true, focus = false) {
+  state.settingsSection = ['general', 'tools', 'extensions'].includes(section) ? section : 'general';
+  document.querySelectorAll('[data-settings-section]').forEach((button) => {
+    const selected = button.dataset.settingsSection === state.settingsSection;
+    button.setAttribute('aria-selected', String(selected));
+    button.tabIndex = selected ? 0 : -1;
+    if (selected && focus) button.focus();
+  });
+  document.querySelectorAll('[data-settings-panel]').forEach((panel) => { panel.hidden = panel.dataset.settingsPanel !== state.settingsSection; });
+  $('capability-settings').hidden = state.settingsSection === 'general';
+  if (updateUrl && state.currentView === 'settings') writeRoute();
+}
+
+function showView(view, updateUrl = true, section = state.settingsSection) {
+  state.currentView = ['overview', 'logs', 'settings'].includes(view) ? view : 'overview';
+  for (const name of ['overview', 'logs', 'settings']) $(name + '-view').hidden = name !== state.currentView;
+  $('breadcrumb-current').textContent = { overview: '服务概览', logs: '实时日志', settings: '服务设置' }[state.currentView];
+  document.querySelectorAll('[data-view]').forEach((button) => {
+    const active = button.dataset.view === state.currentView;
+    button.classList.toggle('active', active);
+    if (active) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current');
+  });
+  if (state.currentView === 'settings') showSettingsTab(section, false);
+  if (updateUrl) writeRoute();
+  if (state.currentView === 'logs') renderLogs();
+}
+
+function restoreRoute() {
+  const params = new URL(location.href).searchParams;
+  const view = params.get('tab');
+  showView(view === 'settings' || view === 'logs' ? view : 'overview', false, params.get('section') || 'general');
 }
 
 function updateCurl() {
@@ -396,6 +424,19 @@ async function saveConfig(event) {
   event.preventDefault();
   if (!state.config) { toast('配置尚未读取，无法安全保存。请刷新页面后重试。', true); return; }
   if (state.controller) { toast('请等待本轮完成或停止后，再保存设置。', true); return; }
+  const form = $('config-form');
+  if (!form.checkValidity()) {
+    const invalid = Array.from(form.elements).find((element) => element.willValidate && !element.validity.valid);
+    if (invalid) {
+      const panel = invalid.closest('[data-settings-panel]');
+      showView('settings', true, panel?.dataset.settingsPanel || 'general');
+      let details = invalid.closest('details');
+      while (details) { details.open = true; details = details.parentElement?.closest('details'); }
+      invalid.focus();
+      invalid.reportValidity();
+    }
+    return;
+  }
   $('save-button').disabled = true;
   const patch = {
     maxSessions: Number($('max-sessions').value),
@@ -677,7 +718,21 @@ async function runPrompt(event) {
 }
 
 document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => showView(button.dataset.view)));
-window.addEventListener('popstate', () => showView(new URL(location.href).searchParams.get('tab') === 'logs' ? 'logs' : 'overview', false));
+window.addEventListener('popstate', restoreRoute);
+const settingsTabs = Array.from(document.querySelectorAll('[data-settings-section]'));
+settingsTabs.forEach((button, index) => {
+  button.addEventListener('click', () => showSettingsTab(button.dataset.settingsSection));
+  button.addEventListener('keydown', (event) => {
+    let next;
+    if (event.key === 'ArrowRight') next = (index + 1) % settingsTabs.length;
+    else if (event.key === 'ArrowLeft') next = (index + settingsTabs.length - 1) % settingsTabs.length;
+    else if (event.key === 'Home') next = 0;
+    else if (event.key === 'End') next = settingsTabs.length - 1;
+    else return;
+    event.preventDefault();
+    showSettingsTab(settingsTabs[next].dataset.settingsSection, true, true);
+  });
+});
 $('config-form').addEventListener('submit', saveConfig);
 $('reload-models').addEventListener('click', () => loadModels(true));
 $('model').addEventListener('change', () => { state.sessionId = null; updateRequestModel(); });
@@ -690,7 +745,7 @@ $('refresh-tools').addEventListener('click', async () => {
   try { await loadStatus(); } finally { $('refresh-tools').disabled = false; }
 });
 $('refresh-sessions').addEventListener('click', loadSessions);
-$('refresh-button').addEventListener('click', () => { void refresh(); });
+$('refresh-button').addEventListener('click', () => { void refresh(true); });
 $('copy-endpoint').addEventListener('click', () => copy(baseUrl(), '接口地址'));
 $('copy-curl').addEventListener('click', () => copy($('curl-example').textContent, '请求示例'));
 $('show-key').addEventListener('click', () => {
@@ -735,14 +790,14 @@ $('clear-logs').addEventListener('click', () => {
   renderLogs();
 });
 
-async function refresh() {
+async function refresh(includeCapabilities = false) {
   $('refresh-button').disabled = true;
-  await Promise.all([loadStatus(), loadSessions()]);
+  await Promise.all([loadStatus(), loadSessions(), ...(includeCapabilities && state.currentView === 'settings' ? [loadCapabilities()] : [])]);
   $('refresh-button').disabled = false;
 }
 
 async function init() {
-  showView(new URL(location.href).searchParams.get('tab') === 'logs' ? 'logs' : 'overview', false);
+  restoreRoute();
   $('endpoint').textContent = baseUrl();
   try { applyConfig(await api('/api/config')); } catch (error) { toast(`无法加载配置：${error.message}`, true); }
   await Promise.all([refresh(), loadModels(), loadCapabilities(), connectLogs()]);
