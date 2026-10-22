@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { getSupportedThinkingLevels } from '@earendil-works/pi-ai/compat';
-import { canonicalOverrides } from './config.js';
+import { canonicalOverrides, DEFAULT_ADDITIONAL_SYSTEM_PROMPT } from './config.js';
 import { discoverExtensions } from './extension-catalog.js';
 import { toolPolicy } from './tool-policy.js';
 
@@ -52,7 +52,7 @@ function bundledCommand() {
 }
 
 class RpcWorker extends EventEmitter {
-  constructor(command, { cwd, model, effort, systemPrompt, projectTrust, saveSessions = false, enableSkills = false, toolOverrides = {}, selectedExtensions, logger }) {
+  constructor(command, { cwd, model, effort, systemPrompt, additionalSystemPrompt = DEFAULT_ADDITIONAL_SYSTEM_PROMPT, projectTrust, saveSessions = false, enableSkills = false, toolOverrides = {}, selectedExtensions, logger }) {
     super();
     this.pending = new Map();
     this.sequence = 0;
@@ -73,7 +73,8 @@ class RpcWorker extends EventEmitter {
     if (projectTrust === 'deny') args.push('--no-approve');
     if (model) args.push('--model', model);
     if (effort) args.push('--thinking', effort);
-    if (systemPrompt) args.push('--append-system-prompt', systemPrompt);
+    const appendSystemPrompt = [systemPrompt, additionalSystemPrompt].filter(Boolean).join('\n\n');
+    if (appendSystemPrompt) args.push('--append-system-prompt', appendSystemPrompt);
     this.child = spawn(command.file, args, {
       cwd,
       env: { ...process.env, PI_SKIP_VERSION_CHECK: '1', PICALL_TOOL_OVERRIDES: JSON.stringify(toolOverrides) },
@@ -286,7 +287,8 @@ export class PiRuntime {
     }
     if (this.closed) throw failure('Pi runtime is shutting down.', 503, 'runtime_closed');
     const worker = new RpcWorker(this.getCommand(), { cwd: config.workdir || process.cwd(), projectTrust: config.projectTrust || 'default',
-      enableSkills: config.enableSkills === true, toolOverrides: config.toolOverrides || {}, logger: this.logger, ...options, selectedExtensions });
+      enableSkills: config.enableSkills === true, toolOverrides: config.toolOverrides || {}, additionalSystemPrompt: config.additionalSystemPrompt ?? DEFAULT_ADDITIONAL_SYSTEM_PROMPT,
+      logger: this.logger, ...options, selectedExtensions });
     this.workers.add(worker);
     worker.once('failure', () => this.workers.delete(worker));
     return worker;
@@ -352,6 +354,7 @@ export class PiRuntime {
       model: options.model ?? existing?.settings.model ?? '',
       effort: options.effort ?? existing?.settings.effort ?? null,
       systemPrompt: options.systemPrompt || '',
+      additionalSystemPrompt: config.additionalSystemPrompt ?? DEFAULT_ADDITIONAL_SYSTEM_PROMPT,
       workdir: config.workdir || process.cwd(),
       projectTrust: config.projectTrust || 'default',
       saveSessions: config.saveSessions === true,

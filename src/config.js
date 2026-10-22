@@ -5,11 +5,13 @@ import { randomUUID } from 'node:crypto';
 
 export const EFFORTS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 export const PROJECT_TRUST = ['default', 'allow', 'deny'];
+export const DEFAULT_ADDITIONAL_SYSTEM_PROMPT = '每一次 turn 中，和工具的交互层数最大是 2 次。';
 export const DEFAULTS = Object.freeze({
   host: '127.0.0.1', port: 8787,
   apiKey: '', workdir: process.cwd(), maxSessions: 8, idleTimeoutMinutes: 30,
   requestTimeoutSeconds: 300, projectTrust: 'default', saveSessions: false, enableSkills: false,
   toolOverrides: Object.freeze({}), enableExtensions: true, extensionOverrides: Object.freeze({}),
+  additionalSystemPrompt: DEFAULT_ADDITIONAL_SYSTEM_PROMPT,
 });
 
 export const canonicalOverrides = (value = {}) => Object.fromEntries(Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
@@ -43,6 +45,9 @@ function validate(values) {
   if (typeof values.saveSessions !== 'boolean') throw appError('saveSessions must be a boolean.');
   if (typeof values.enableSkills !== 'boolean') throw appError('enableSkills must be a boolean.');
   if (typeof values.enableExtensions !== 'boolean') throw appError('enableExtensions must be a boolean.');
+  if (typeof values.additionalSystemPrompt !== 'string' || values.additionalSystemPrompt.length > 16384 || values.additionalSystemPrompt.includes('\0')) {
+    throw appError('additionalSystemPrompt must be a string of at most 16384 characters without NUL characters.');
+  }
   validateOverrides(values.toolOverrides, 'toolOverrides', name => /^[A-Za-z0-9_.:-]{1,256}$/.test(name), 32 * 1024);
   validateOverrides(values.extensionOverrides, 'extensionOverrides', name => name.length <= 4096 && !/[\u0000-\u001f\u007f]/.test(name) &&
     (isAbsolute(name) || /^builtin:[A-Za-z0-9_.-]+$/.test(name)), 128 * 1024);
@@ -78,7 +83,7 @@ export class ConfigStore {
   update(patch) {
     const operation = this.queue.then(async () => {
       if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw appError('Settings must be a JSON object.');
-      const allowed = ['apiKey', 'maxSessions', 'idleTimeoutMinutes', 'requestTimeoutSeconds', 'projectTrust', 'saveSessions', 'enableSkills', 'toolOverrides', 'enableExtensions', 'extensionOverrides'];
+      const allowed = ['apiKey', 'maxSessions', 'idleTimeoutMinutes', 'requestTimeoutSeconds', 'projectTrust', 'saveSessions', 'enableSkills', 'toolOverrides', 'enableExtensions', 'extensionOverrides', 'additionalSystemPrompt'];
       for (const key of Object.keys(patch)) if (!allowed.includes(key)) throw appError(`Setting is read-only or unknown: ${key}`);
       const merged = { ...this.value, ...patch };
       validate(merged);

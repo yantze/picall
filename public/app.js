@@ -1,6 +1,7 @@
 'use strict';
 
 const $ = (id) => document.getElementById(id);
+const DEFAULT_ADDITIONAL_SYSTEM_PROMPT = '每一次 turn 中，和工具的交互层数最大是 2 次。';
 const state = { config: null, status: null, models: [], logs: [], seenLogs: new Set(), paused: false, sessionId: null, controller: null, eventSource: null, toastTimer: null, logFloor: 0, latestLogTime: '', logConnected: false, toolRun: null,
   capabilityTools: null, capabilityExtensions: null, capabilityError: '', capabilityRequest: 0,
   toolOverrides: Object.create(null), extensionOverrides: Object.create(null), currentView: 'overview', settingsSection: 'general' };
@@ -103,6 +104,8 @@ function applyConfig(config) {
   $('idle-timeout').value = config.idleTimeoutMinutes ?? 30;
   $('save-sessions').checked = config.saveSessions === true;
   $('enable-skills').checked = config.enableSkills === true;
+  $('additional-system-prompt').value = config.additionalSystemPrompt ?? DEFAULT_ADDITIONAL_SYSTEM_PROMPT;
+  validateAdditionalSystemPrompt();
   $('enable-extensions').checked = config.enableExtensions !== false;
   state.toolOverrides = cloneOverrides(config.toolOverrides);
   state.extensionOverrides = cloneOverrides(config.extensionOverrides);
@@ -153,6 +156,12 @@ function updateProjectTrustHelp() {
     deny: '忽略当前工作目录的项目资源，不加载其中的扩展与 MCP；用户级配置仍由 Pi 管理。',
   }[value];
   $('project-trust-help').classList.toggle('trust-allow', value === 'allow');
+}
+
+function validateAdditionalSystemPrompt() {
+  const input = $('additional-system-prompt');
+  input.setCustomValidity(input.value.includes('\0') ? '附加系统 Prompt 不可包含 NUL 字符。'
+    : input.value.length > 16384 ? '附加系统 Prompt 最多包含 16,384 个字符。' : '');
 }
 
 async function loadCapabilities(userTriggered = false) {
@@ -424,6 +433,7 @@ async function saveConfig(event) {
   event.preventDefault();
   if (!state.config) { toast('配置尚未读取，无法安全保存。请刷新页面后重试。', true); return; }
   if (state.controller) { toast('请等待本轮完成或停止后，再保存设置。', true); return; }
+  validateAdditionalSystemPrompt();
   const form = $('config-form');
   if (!form.checkValidity()) {
     const invalid = Array.from(form.elements).find((element) => element.willValidate && !element.validity.valid);
@@ -443,6 +453,7 @@ async function saveConfig(event) {
     idleTimeoutMinutes: Number($('idle-timeout').value),
     saveSessions: $('save-sessions').checked,
     enableSkills: $('enable-skills').checked,
+    additionalSystemPrompt: $('additional-system-prompt').value,
     enableExtensions: $('enable-extensions').checked,
     toolOverrides: cloneOverrides(state.toolOverrides),
     extensionOverrides: cloneOverrides(state.extensionOverrides),
@@ -738,6 +749,7 @@ $('reload-models').addEventListener('click', () => loadModels(true));
 $('model').addEventListener('change', () => { state.sessionId = null; updateRequestModel(); });
 $('effort').addEventListener('change', () => { state.sessionId = null; updateCurl(); });
 $('project-trust').addEventListener('change', updateProjectTrustHelp);
+$('additional-system-prompt').addEventListener('input', validateAdditionalSystemPrompt);
 $('refresh-capabilities').addEventListener('click', () => loadCapabilities(true));
 $('enable-extensions').addEventListener('change', () => { $('extension-master-note').hidden = $('enable-extensions').checked; });
 $('refresh-tools').addEventListener('click', async () => {

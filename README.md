@@ -33,7 +33,7 @@ picall --workdir /absolute/path/to/your/project
 ```bash
 npm ci
 npm start -- --workdir /absolute/path/to/your/project
-# 或 npm pack 后 npm install -g ./yantze-picall-0.5.1.tgz
+# 或 npm pack 后 npm install -g ./yantze-picall-0.6.0.tgz
 ```
 
 启动后打开终端输出的本地管理地址，默认端口 **8787**。左侧“服务设置”独立管理配置，包含“服务配置”“工具策略”“Pi 扩展”三个标签页，共用保存按钮；切换页面或标签不会清空待保存的选择。服务概览保留只读模型目录、试运行和会话。试运行作为一个客户端，选择仅用于本次请求的模型和推理强度，不保存为服务默认值。日志入口可在新标签页中打开。
@@ -131,6 +131,16 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 ```
 
 不带会话 header 的请求每次创建新会话；会话只在服务进程内保留，重启后不恢复。默认最多 8 个会话，空闲 30 分钟回收；达到容量时优先回收最久未用的空闲会话，全部繁忙时返回 `503`。已回收的会话 ID 返回 `409`，需要新 ID。修改模型、显式 reasoning effort 或 system prompt 后应新建会话；续聊省略 reasoning effort 会沿用该会话的初始选择。页面可主动关闭会话。默认请求超时 300 秒，可通过本地配置 API 的 `requestTimeoutSeconds` 调整。
+
+### 附加系统 Prompt
+
+“服务设置 → 服务配置”提供可编辑的“附加系统 Prompt”，默认内容为：
+
+```text
+每一次 turn 中，和工具的交互层数最大是 2 次。
+```
+
+此文本追加到 Pi 原生系统指令及客户端 `system` / `developer` 消息之后，作为模型行为提示；不会替换它们。可通过管理 API `PUT /api/config` 的 `additionalSystemPrompt` 字段保存，最多 16,384 字符，显式空字符串表示不附加。旧配置缺少字段时使用默认文本。修改后请新建会话，旧 `X-Session-Id` 返回 `409 session_configuration_changed`；续聊不会重复追加。提示词约束由模型遵循，不会新增工具调用次数的强制计数器。运行日志不记录提示正文。
 
 ### 保存 Pi 原生会话
 

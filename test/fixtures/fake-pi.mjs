@@ -109,9 +109,11 @@ function handle(command) {
         }
         const metadata = prompt.includes('REQUEST_METADATA:');
         const skillsMetadata = prompt.includes('SKILLS_METADATA:');
-        const first = skillsMetadata ? JSON.stringify({ enableSkills: !process.argv.includes('--no-skills') }) : metadata ? JSON.stringify({ model: selectedModel, effort: thinkingLevel,
+        const systemPromptMetadata = prompt.includes('SYSTEM_PROMPT_METADATA:');
+        const first = systemPromptMetadata ? JSON.stringify({ systemPrompt: argument('--append-system-prompt', ''),
+          hasAppendSystemPrompt: process.argv.includes('--append-system-prompt') }) : skillsMetadata ? JSON.stringify({ enableSkills: !process.argv.includes('--no-skills') }) : metadata ? JSON.stringify({ model: selectedModel, effort: thinkingLevel,
           explicitEffort: process.argv.includes('--thinking'), contextWindow: model().contextWindow }) : 'Hello';
-        const second = metadata || skillsMetadata ? '' : prompt.includes('UNICODE:') ? ' line\u2028paragraph\u2029end' : ` from Pi (turn ${turn})`;
+        const second = metadata || skillsMetadata || systemPromptMetadata ? '' : prompt.includes('UNICODE:') ? ' line\u2028paragraph\u2029end' : ` from Pi (turn ${turn})`;
         emit({ type: 'message_start', message: message('') });
         emit({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: first }, message: message(first) });
         // An agent_end is not final: Pi can continue after compaction/retries.

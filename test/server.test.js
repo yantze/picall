@@ -11,6 +11,7 @@ import { Logger } from '../src/logger.js';
 import { PiRuntime } from '../src/pi-rpc.js';
 
 const fakePi = fileURLToPath(new URL('./fixtures/fake-pi.mjs', import.meta.url));
+const defaultAdditionalSystemPrompt = '每一次 turn 中，和工具的交互层数最大是 2 次。';
 const completion = (content = 'Say hello', extra = {}) => ({
   model: 'fake/fake-model', messages: [{ role: 'user', content }], ...extra,
 });
@@ -807,4 +808,120 @@ test('Capabilities changes require fresh sessions while equivalent map order pre
   const continued = await continueSession(id);
   assert.equal(continued.status, 200);
   assert.equal((await continued.json()).choices[0].message.content, 'Hello from Pi (turn 2)');
+});
+
+async function systemPromptMetadata(response) {
+  assert.equal(response.status, 200);
+  if (response.headers.get('content-type')?.startsWith('text/event-stream')) {
+    const wire = await response.text();
+    const records = wire.split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trim());
+    assert.equal(records.at(-1), '[DONE]');
+    const content = records.filter(record => record !== '[DONE]').map(record => JSON.parse(record))
+      .flatMap(record => record.choices || []).map(choice => choice.delta?.content || '').join('');
+    return JSON.parse(content);
+  }
+  return JSON.parse((await response.json()).choices[0].message.content);
+}
+
+test('Additional system prompt defaults upgrade legacy config without rewriting and validate atomic persistent updates', async (t) => {
+  const apiKey = 'sk-additional-prompt-config-test';
+  const { request, configStore, dataDir } = await setup(t, { apiKey, enableSkills: true, saveSessions: true,
+    enableExtensions: false, toolOverrides: { bash: true } });
+  const legacy = JSON.parse(await readFile(configStore.path, 'utf8'));
+  delete legacy.additionalSystemPrompt;
+  const legacyContents = JSON.stringify(legacy);
+  await writeFile(configStore.path, legacyContents, { mode: 0o600 });
+  await configStore.load();
+  assert.equal((await (await request('/api/config')).json()).additionalSystemPrompt, defaultAdditionalSystemPrompt);
+  assert.equal(await readFile(configStore.path, 'utf8'), legacyContents);
+
+  for (const additionalSystemPrompt of ['CUSTOM_PROMPT_CONFIG_CANARY', '', 'x'.repeat(16384)]) {
+    const response = await request('/api/config', { method: 'PUT', body: { additionalSystemPrompt } });
+    assert.equal(response.status, 200);
+    const config = await response.json();
+    assert.equal(config.additionalSystemPrompt, additionalSystemPrompt);
+    assert.equal(config.apiKeyConfigured, true);
+    assert.equal(Object.hasOwn(config, 'apiKey'), false);
+    const reloaded = new ConfigStore({ dataDir, overrides: { workdir: dataDir } });
+    await reloaded.load();
+    assert.deepEqual(reloaded.value, { ...legacy, additionalSystemPrompt });
+  }
+  const before = await readFile(configStore.path, 'utf8');
+  const beforeValue = structuredClone(configStore.value);
+  for (const additionalSystemPrompt of [null, false, 1, {}, [], 'x'.repeat(16385), 'invalid\0prompt']) {
+    const response = await request('/api/config', { method: 'PUT', body: { additionalSystemPrompt } });
+    assert.equal(response.status, 400);
+    assert.match((await response.json()).error.message, /additionalSystemPrompt/);
+    assert.equal(await readFile(configStore.path, 'utf8'), before);
+    assert.deepEqual(configStore.value, beforeValue);
+  }
+});
+
+test('Additional system prompt appends to client system and developer messages for JSON and SSE requests', async (t) => {
+  const { request, logger } = await setup(t);
+  const system = 'CLIENT_SYSTEM_CANARY_Keep answers concise.';
+  const developer = 'CLIENT_DEVELOPER_CANARY_Use plain language.';
+  for (const stream of [false, true]) {
+    const response = await request('/v1/chat/completions', { method: 'POST', body: completion('SYSTEM_PROMPT_METADATA:', {
+      stream, messages: [{ role: 'system', content: system }, { role: 'developer', content: developer },
+        { role: 'user', content: 'SYSTEM_PROMPT_METADATA:' }],
+    }) });
+    assert.deepEqual(await systemPromptMetadata(response), {
+      systemPrompt: `${system}\n\n${developer}\n\n${defaultAdditionalSystemPrompt}`, hasAppendSystemPrompt: true,
+    });
+  }
+  const withoutClientSystem = await request('/v1/chat/completions', { method: 'POST', body: completion('SYSTEM_PROMPT_METADATA:') });
+  assert.deepEqual(await systemPromptMetadata(withoutClientSystem), {
+    systemPrompt: defaultAdditionalSystemPrompt, hasAppendSystemPrompt: true,
+  });
+  const logs = JSON.stringify(logger.history());
+  assert.ok(!logs.includes(system));
+  assert.ok(!logs.includes(developer));
+});
+
+test('Additional system prompt is appended once when a continued session omits client system instructions', async (t) => {
+  const { request } = await setup(t);
+  const clientSystem = 'SESSION_SYSTEM_CANARY_Answer in Chinese.';
+  const body = completion('SYSTEM_PROMPT_METADATA:', { messages: [
+    { role: 'system', content: clientSystem }, { role: 'user', content: 'SYSTEM_PROMPT_METADATA:' },
+  ] });
+  const first = await request('/v1/chat/completions', { method: 'POST', body });
+  const id = first.headers.get('x-session-id');
+  const expected = { systemPrompt: `${clientSystem}\n\n${defaultAdditionalSystemPrompt}`, hasAppendSystemPrompt: true };
+  assert.deepEqual(await systemPromptMetadata(first), expected);
+  for (const stream of [false, true]) {
+    const response = await request('/v1/chat/completions', { method: 'POST', headers: { 'x-session-id': id },
+      body: completion('SYSTEM_PROMPT_METADATA:', { stream }) });
+    assert.deepEqual(await systemPromptMetadata(response), expected);
+  }
+});
+
+test('Additional system prompt changes require new sessions and an empty value disables only the extra prompt', async (t) => {
+  const { request, logger } = await setup(t);
+  const clientSystem = 'CLIENT_PROMPT_PRESERVED_CANARY';
+  const body = completion('SYSTEM_PROMPT_METADATA:', { messages: [
+    { role: 'system', content: clientSystem }, { role: 'user', content: 'SYSTEM_PROMPT_METADATA:' },
+  ] });
+  const first = await request('/v1/chat/completions', { method: 'POST', body });
+  const id = first.headers.get('x-session-id');
+  await systemPromptMetadata(first);
+  const additionalSystemPrompt = 'CUSTOM_ADDITIONAL_PROMPT_CANARY_Use at most two tool layers.';
+  assert.equal((await request('/api/config', { method: 'PUT', body: { additionalSystemPrompt } })).status, 200);
+  const outdated = await request('/v1/chat/completions', { method: 'POST', headers: { 'x-session-id': id },
+    body: completion('SYSTEM_PROMPT_METADATA:') });
+  assert.equal(outdated.status, 409);
+  assert.equal((await outdated.json()).error.code, 'session_configuration_changed');
+  const updated = await request('/v1/chat/completions', { method: 'POST', body });
+  assert.deepEqual(await systemPromptMetadata(updated), {
+    systemPrompt: `${clientSystem}\n\n${additionalSystemPrompt}`, hasAppendSystemPrompt: true,
+  });
+
+  assert.equal((await request('/api/config', { method: 'PUT', body: { additionalSystemPrompt: '' } })).status, 200);
+  const clientOnly = await request('/v1/chat/completions', { method: 'POST', body });
+  assert.deepEqual(await systemPromptMetadata(clientOnly), { systemPrompt: clientSystem, hasAppendSystemPrompt: true });
+  const noSystem = await request('/v1/chat/completions', { method: 'POST', body: completion('SYSTEM_PROMPT_METADATA:', { stream: true }) });
+  assert.deepEqual(await systemPromptMetadata(noSystem), { systemPrompt: '', hasAppendSystemPrompt: false });
+  const logs = JSON.stringify(logger.history());
+  assert.ok(!logs.includes(clientSystem));
+  assert.ok(!logs.includes(additionalSystemPrompt));
 });
