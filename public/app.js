@@ -59,6 +59,7 @@ function applyConfig(config) {
   state.config = config;
   $('max-sessions').value = config.maxSessions ?? 8;
   $('idle-timeout').value = config.idleTimeoutMinutes ?? 30;
+  $('save-sessions').checked = config.saveSessions === true;
   $('workdir').value = config.workdir || '';
   $('project-trust').value = config.projectTrust || 'default';
   updateProjectTrustHelp();
@@ -282,6 +283,7 @@ async function saveConfig(event) {
   const patch = {
     maxSessions: Number($('max-sessions').value),
     idleTimeoutMinutes: Number($('idle-timeout').value),
+    saveSessions: $('save-sessions').checked,
     projectTrust: $('project-trust').value,
   };
   if ($('disable-key').checked) patch.apiKey = '';
@@ -332,6 +334,14 @@ async function loadSessions() {
       const model = document.createElement('span');
       model.textContent = `${session.model || '默认模型'} · ${session.busy ? '执行中' : '空闲'}`;
       detail.append(id, model);
+      if (session.saveSessions) {
+        const file = document.createElement('code');
+        file.className = 'session-file';
+        file.textContent = session.sessionFile || 'Pi 会话保存已开启，等待文件路径';
+        file.title = session.sessionFile || 'Pi 返回会话文件路径后显示';
+        file.setAttribute('aria-label', session.sessionFile ? `Pi 会话文件：${session.sessionFile}` : 'Pi 会话文件路径尚未返回');
+        detail.append(file);
+      }
       const close = document.createElement('button');
       close.className = 'icon-button';
       close.textContent = '×';

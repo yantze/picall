@@ -1,13 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
 import { createServer } from 'node:net';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 
 const cli = fileURLToPath(new URL('../bin/picall.js', import.meta.url));
+const execFileAsync = promisify(execFile);
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function unusedPort() {
@@ -21,7 +23,7 @@ async function unusedPort() {
   return port;
 }
 
-async function startCli(t, { flags = () => [], savedTrust } = {}) {
+async function startCli(t, { flags = () => [], savedTrust, savedConfig = {} } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'picall-cli-test-'));
   const profile = join(root, 'profile');
   const workdir = join(root, 'project');
@@ -51,7 +53,8 @@ async function startCli(t, { flags = () => [], savedTrust } = {}) {
       async execute() { return { content: [{ type: 'text', text: 'fixture result' }] }; }
     });
   }\n`);
-  if (savedTrust !== undefined) await writeFile(join(dataDir, 'config.json'), JSON.stringify({ projectTrust: savedTrust }), { mode: 0o600 });
+  const saved = { ...savedConfig, ...(savedTrust === undefined ? {} : { projectTrust: savedTrust }) };
+  if (Object.keys(saved).length) await writeFile(join(dataDir, 'config.json'), JSON.stringify(saved), { mode: 0o600 });
   const port = await unusedPort();
   let output = '';
   let spawnError;
@@ -93,6 +96,7 @@ test('CLI without --workdir keeps default trust and skips unapproved project too
   const config = await get('/api/config');
   assert.equal(config.workdir, workdir);
   assert.equal(config.projectTrust, 'default');
+  assert.equal(config.saveSessions, false);
   const { pi } = await get('/api/status');
   assert.equal(pi.available, true, pi.error);
   assert.equal(pi.agentDir, profile);
@@ -132,3 +136,23 @@ for (const projectTrust of ['deny', 'default']) {
     });
   }
 }
+
+for (const { saved, flags, expected } of [
+  { saved: true, flags: [], expected: true },
+  { saved: false, flags: ['--save-sessions'], expected: true },
+  { saved: true, flags: ['--no-save-sessions'], expected: false },
+  { saved: true, flags: ['--save-sessions', '--no-save-sessions'], expected: false },
+  { saved: false, flags: ['--no-save-sessions', '--save-sessions'], expected: true },
+]) {
+  test(`CLI session saving ${flags.join(' ') || '(saved setting)'} overrides saved ${saved}`, { timeout: 30_000 }, async (t) => {
+    const { get } = await startCli(t, { savedConfig: { saveSessions: saved }, flags: () => flags });
+    assert.equal((await get('/api/config')).saveSessions, expected);
+  });
+}
+
+test('CLI help documents both session-saving switches', async () => {
+  const { stdout, stderr } = await execFileAsync(process.execPath, [cli, '--help']);
+  assert.equal(stderr, '');
+  assert.match(stdout, /--save-sessions\b/);
+  assert.match(stdout, /--no-save-sessions\b/);
+});

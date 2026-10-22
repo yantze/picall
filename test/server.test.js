@@ -533,3 +533,83 @@ test('changing project trust requires a fresh session rather than retaining earl
   assert.equal(followup.status, 409);
   assert.equal((await followup.json()).error.code, 'session_configuration_changed');
 });
+
+test('session saving is a persistent boolean setting without changing API credentials or model selection', async (t) => {
+  const apiKey = 'sk-session-saving-test';
+  const { request, configStore, dataDir } = await setup(t, { apiKey });
+  assert.equal((await (await request('/api/config')).json()).saveSessions, false);
+  for (const saveSessions of [true, false]) {
+    const saved = await request('/api/config', { method: 'PUT', body: { saveSessions } });
+    assert.equal(saved.status, 200);
+    const config = await saved.json();
+    assert.equal(config.saveSessions, saveSessions);
+    assert.equal(config.apiKeyConfigured, true);
+    assert.equal(Object.hasOwn(config, 'apiKey'), false);
+    for (const key of ['model', 'effort', 'contextWindow']) assert.equal(Object.hasOwn(config, key), false);
+    const reloaded = new ConfigStore({ dataDir, overrides: { workdir: dataDir } });
+    await reloaded.load();
+    assert.equal(reloaded.value.saveSessions, saveSessions);
+    assert.equal(reloaded.value.apiKey, apiKey);
+  }
+  const before = await readFile(configStore.path, 'utf8');
+  for (const saveSessions of ['true', 'false', 0, 1, null, {}, []]) {
+    const response = await request('/api/config', { method: 'PUT', body: { saveSessions } });
+    assert.equal(response.status, 400);
+    assert.match((await response.json()).error.message, /saveSessions.*boolean/);
+    assert.equal(await readFile(configStore.path, 'utf8'), before);
+    assert.equal(configStore.value.saveSessions, false);
+    assert.equal(configStore.value.apiKey, apiKey);
+  }
+  const response = await request('/v1/chat/completions', { method: 'POST',
+    headers: { authorization: `Bearer ${apiKey}` },
+    body: completion('REQUEST_METADATA:', { model: 'fake/plain-model', reasoning_effort: 'none' }) });
+  assert.equal(response.status, 200);
+  const metadata = JSON.parse((await response.json()).choices[0].message.content);
+  assert.equal(metadata.model, 'fake/plain-model');
+  assert.equal(metadata.effort, 'off');
+});
+
+test('session-saving changes require fresh sessions and expose each session persistence metadata', async (t) => {
+  const { request } = await setup(t);
+  const openSession = async () => {
+    const response = await request('/v1/chat/completions', { method: 'POST', body: completion() });
+    assert.equal(response.status, 200);
+    await response.json();
+    return response.headers.get('x-session-id');
+  };
+  const getSession = async (id) => {
+    const { sessions } = await (await request('/api/sessions')).json();
+    return sessions.find(session => session.id === id);
+  };
+  const continueSession = (id) => request('/v1/chat/completions', { method: 'POST',
+    headers: { 'x-session-id': id }, body: completion('Next turn') });
+
+  const ephemeralId = await openSession();
+  const ephemeral = await getSession(ephemeralId);
+  assert.equal(ephemeral.saveSessions, false);
+  assert.equal(ephemeral.sessionFile, null);
+  assert.equal((await request('/api/config', { method: 'PUT', body: { saveSessions: true } })).status, 200);
+  const oldEphemeral = await continueSession(ephemeralId);
+  assert.equal(oldEphemeral.status, 409);
+  assert.equal((await oldEphemeral.json()).error.code, 'session_configuration_changed');
+
+  const persistentId = await openSession();
+  const persistent = await getSession(persistentId);
+  assert.equal(persistent.saveSessions, true);
+  assert.equal(typeof persistent.sessionFile, 'string');
+  assert.match(persistent.sessionFile, /fake-session-\d+\.jsonl$/);
+  const persistedTurn = await continueSession(persistentId);
+  assert.equal(persistedTurn.status, 200);
+  assert.equal((await persistedTurn.json()).choices[0].message.content, 'Hello from Pi (turn 2)');
+  assert.equal((await getSession(persistentId)).sessionFile, persistent.sessionFile);
+
+  assert.equal((await request('/api/config', { method: 'PUT', body: { saveSessions: false } })).status, 200);
+  const oldPersistent = await continueSession(persistentId);
+  assert.equal(oldPersistent.status, 409);
+  assert.equal((await oldPersistent.json()).error.code, 'session_configuration_changed');
+  assert.equal((await getSession(persistentId)).saveSessions, true);
+  assert.equal((await getSession(ephemeralId)).saveSessions, false);
+  const newEphemeral = await getSession(await openSession());
+  assert.equal(newEphemeral.saveSessions, false);
+  assert.equal(newEphemeral.sessionFile, null);
+});

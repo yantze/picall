@@ -49,7 +49,7 @@ function bundledCommand() {
 }
 
 class RpcWorker extends EventEmitter {
-  constructor(command, { cwd, model, effort, systemPrompt, projectTrust, logger }) {
+  constructor(command, { cwd, model, effort, systemPrompt, projectTrust, saveSessions = false, logger }) {
     super();
     this.pending = new Map();
     this.sequence = 0;
@@ -59,7 +59,8 @@ class RpcWorker extends EventEmitter {
     this.context = runtimeContext(cwd, command);
     this.metadata = { activeTools: [], availableTools: [] };
     this.metadataKnown = false;
-    const args = [...command.args, '--mode', 'rpc', '--no-session', '--extension', extensionPath];
+    const args = [...command.args, '--mode', 'rpc', '--extension', extensionPath];
+    if (!saveSessions) args.push('--no-session');
     if (projectTrust === 'allow') args.push('--approve');
     if (projectTrust === 'deny') args.push('--no-approve');
     if (model) args.push('--model', model);
@@ -246,7 +247,7 @@ export class PiRuntime {
       if (this.closed) throw failure('Pi runtime is shutting down.', 503, 'runtime_closed');
       const command = this.getCommand();
       version = command.packagePath ? JSON.parse(await readFile(command.packagePath, 'utf8')).version : 'custom';
-      worker = this.createWorker({});
+      worker = this.createWorker({ saveSessions: false });
       this.probeWorkers.add(worker);
       await worker.send({ type: 'get_state' });
       worker.assertMetadata();
@@ -277,7 +278,7 @@ export class PiRuntime {
     let worker;
     try {
       if (this.closed) throw failure('Pi runtime is shutting down.', 503, 'runtime_closed');
-      worker = this.createWorker({});
+      worker = this.createWorker({ saveSessions: false });
       this.probeWorkers.add(worker);
       const data = await worker.send({ type: 'get_available_models' });
       return (data?.models || []).map((model) => ({
@@ -306,6 +307,7 @@ export class PiRuntime {
       systemPrompt: options.systemPrompt || '',
       workdir: config.workdir || process.cwd(),
       projectTrust: config.projectTrust || 'default',
+      saveSessions: config.saveSessions === true,
     };
     if (this.retiredIds.has(id)) throw failure('This session has expired or was closed. Use a new session ID to start a conversation.', 409, 'session_expired');
     if (existing) {
@@ -315,7 +317,7 @@ export class PiRuntime {
         throw failure('This Pi session has exited; start a new session.', 409, 'session_expired');
       }
       if (JSON.stringify(existing.settings) !== JSON.stringify(settings)) {
-        throw failure('Model, effort, system prompt, working directory, or project trust changed. Start a new session.', 409, 'session_configuration_changed');
+        throw failure('Model, effort, system prompt, working directory, project trust, or session saving changed. Start a new session.', 409, 'session_configuration_changed');
       }
       existing.busy = true;
       existing.lastUsedAt = Date.now();
@@ -335,6 +337,7 @@ export class PiRuntime {
     // accidentally create two Pi agents with different conversation state.
     const session = {
       id, model: settings.model, busy: true, createdAt: Date.now(), lastUsedAt: Date.now(), settings,
+      saveSessions: settings.saveSessions, sessionFile: null,
       worker: null,
       run: (prompt, runOptions) => this.run(session, prompt, runOptions),
     };
@@ -349,13 +352,15 @@ export class PiRuntime {
       session.worker.on('failure', () => { this.retire(session); });
       const state = await session.worker.send({ type: 'get_state' });
       session.worker.assertMetadata();
+      session.sessionFile = settings.saveSessions ? state?.sessionFile || null : null;
+      if (settings.saveSessions && !session.sessionFile) throw failure('Pi did not enable session saving. Check its session storage configuration.', 502, 'session_persistence_unavailable');
       if (!state?.model) throw failure('Pi has no available model. Configure a provider with pi /login or its API-key environment variable.', 503, 'model_unavailable');
       session.model = `${state.model.provider}/${state.model.id}`;
       if (settings.model && session.model !== settings.model) throw failure(`Pi selected ${session.model} instead of the requested ${settings.model}. Use a model ID from /v1/models.`, 400, 'model_unavailable');
       const levels = await session.worker.send({ type: 'get_available_thinking_levels' });
       if (settings.effort !== null && levels?.levels && !levels.levels.includes(settings.effort)) throw failure(`This model does not support effort ${settings.effort}. Supported: ${levels.levels.join(', ')}.`, 400, 'unsupported_effort');
       if (settings.effort !== null && state.thinkingLevel !== settings.effort) throw failure('Pi did not apply the requested reasoning effort.', 502, 'effort_not_applied');
-      this.logger?.log('info', 'Pi session created.', { sessionId: id, model: session.model });
+      this.logger?.log('info', 'Pi session created.', { sessionId: id, model: session.model, saveSessions: session.saveSessions, sessionFile: session.sessionFile });
       return session;
     } catch (error) {
       this.retire(session);
@@ -466,7 +471,7 @@ export class PiRuntime {
   }
 
   list() {
-    return [...this.sessions.values()].map(({ id, model, busy, createdAt, lastUsedAt, tools, availableTools }) => ({ id, model, busy, createdAt, lastUsedAt, tools, availableTools }));
+    return [...this.sessions.values()].map(({ id, model, busy, createdAt, lastUsedAt, tools, availableTools, saveSessions, sessionFile }) => ({ id, model, busy, createdAt, lastUsedAt, tools, availableTools, saveSessions, sessionFile }));
   }
 
   retire(session) {

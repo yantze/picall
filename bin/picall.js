@@ -13,7 +13,7 @@ import { VERSION } from '../src/version.js';
 const usage = `PiCall ${VERSION} — local Pi-powered OpenAI API
 
 Usage: picall [--port 8787] [--host 127.0.0.1] [--workdir DIR] [--data-dir DIR]
-              [--project-trust default|allow|deny]
+              [--project-trust default|allow|deny] [--save-sessions | --no-save-sessions]
        picall pi [Pi CLI options]
        picall --help | --version
 
@@ -21,6 +21,8 @@ The management UI has no login. Only loopback hosts are supported.
 Pi uses its normal provider credentials, extensions, skills and MCP configuration.
 An explicit --workdir trusts that project's configuration, extensions and MCP.
 Without --workdir, saved trust settings apply. --project-trust can override this.
+Use --save-sessions to keep requests, replies and tool results in Pi's session files.
+Saving is off by default. --no-save-sessions overrides a saved enabled setting.
 Use the bundled Pi CLI for login: picall pi (then type /login)
 `;
 async function main() {
@@ -38,6 +40,10 @@ async function main() {
     const flag = args[i];
     if (flag === '--help' || flag === '-h') { console.log(usage); return; }
     if (flag === '--version' || flag === '-v') { console.log(VERSION); return; }
+    if (flag === '--save-sessions' || flag === '--no-save-sessions') {
+      options.saveSessions = flag === '--save-sessions';
+      continue;
+    }
     if (!['--port', '--host', '--workdir', '--data-dir', '--project-trust'].includes(flag) || !args[i + 1] || args[i + 1].startsWith('--')) throw new Error(`Unknown or incomplete option: ${flag}. Run picall --help.`);
     const value = args[++i];
     if (flag === '--port') options.port = Number(value);

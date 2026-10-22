@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 // Deterministic JSONL Pi RPC peer. It never contacts a model provider.
+import { join } from 'node:path';
+
 if (process.argv.includes('--version')) {
   console.log('1.4.0');
   process.exit(0);
@@ -11,6 +13,8 @@ const argument = (flag, fallback) => {
 };
 let selectedModel = argument('--model', 'fake/fake-model');
 let thinkingLevel = argument('--thinking', selectedModel === 'fake/plain-model' ? 'off' : 'medium');
+// Report persistence metadata without creating a session file in this fixture.
+const sessionFile = process.argv.includes('--no-session') ? null : join(process.cwd(), `fake-session-${process.pid}.jsonl`);
 let turn = 0;
 let running = false;
 let pendingTimer;
@@ -48,7 +52,7 @@ function handle(command) {
     case 'get_state':
       emit({ type: 'extension_ui_request', method: 'setStatus', statusKey: 'picall_runtime',
         statusText: JSON.stringify({ activeTools: ['read', 'bash'], availableTools: ['read', 'bash', 'fixture_inactive'] }) });
-      response(command, { model: model(), thinkingLevel, isStreaming: running, sessionId: `fake-${process.pid}`, messages: [] });
+      response(command, { model: model(), thinkingLevel, isStreaming: running, sessionId: `fake-${process.pid}`, sessionFile, messages: [] });
       break;
     case 'set_model':
       selectedModel = `${command.provider}/${command.modelId}`;

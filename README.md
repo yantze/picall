@@ -13,6 +13,7 @@
 - `/v1/*` 可配置 Bearer API key；本地管理页无需登录。
 - 独立日志标签页、实时事件、过滤搜索、会话查看与关闭；试运行显示工具加载清单和实际调用状态。
 - 一个会话一个 Pi 子进程，支持 `X-Session-Id` 保留工具调用和多轮上下文。
+- 可选保存 Pi 原生会话，记录请求、回复和工具结果，在 Pi CLI 中查看或继续。
 - 使用 Pi 原生模型认证、MCP、extensions、skills 和 Pi packages。
 
 ## 安装与启动
@@ -31,7 +32,7 @@ picall --workdir /absolute/path/to/your/project
 ```bash
 npm ci
 npm start -- --workdir /absolute/path/to/your/project
-# 或 npm pack 后 npm install -g ./yantze-picall-0.2.0.tgz
+# 或 npm pack 后 npm install -g ./yantze-picall-0.3.0.tgz
 ```
 
 启动后打开终端输出的本地管理地址，默认端口 **8787**。管理页保存 API key、会话和项目设置；Pi 模型目录只读展示能力。试运行页作为一个客户端，选择仅用于本次请求的模型和推理强度，不保存为服务默认值。日志入口可在新标签页中打开。
@@ -129,6 +130,22 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 ```
 
 不带会话 header 的请求每次创建新会话；会话只在服务进程内保留，重启后不恢复。默认最多 8 个会话，空闲 30 分钟回收；达到容量时优先回收最久未用的空闲会话，全部繁忙时返回 `503`。已回收的会话 ID 返回 `409`，需要新 ID。修改模型、显式 reasoning effort 或 system prompt 后应新建会话；续聊省略 reasoning effort 会沿用该会话的初始选择。页面可主动关闭会话。默认请求超时 300 秒，可通过本地配置 API 的 `requestTimeoutSeconds` 调整。
+
+### 保存 Pi 原生会话
+
+默认不保存请求正文。启动时增加 `--save-sessions`，或在管理页“会话与运行目录”中开启“保存 Pi 会话到磁盘”：
+
+```bash
+picall --workdir /path/to/project --save-sessions
+```
+
+也可通过管理 API `PUT /api/config` 设置 `{"saveSessions": true}`，配置会保存到本机。`--save-sessions` 和 `--no-save-sessions` 可覆盖启动时读取的保存设置；多次指定时以最后一个为准。
+
+开启后，Pi 使用原生 JSONL session 保存实际发送给它的用户消息、助手回复及工具调用/结果。同一个 `X-Session-Id` 的后续请求追加到同一文件；不带该 header 的每次请求分别创建文件。状态检查、模型查询，以及在调用 Pi 前被拒绝的请求不会生成会话历史。保存开关改变后，已有会话不能继续使用，返回 `409 session_configuration_changed`；请使用新的会话 ID，管理页保存设置后会自动开始新会话。
+
+默认文件位置为 `~/.pi/agent/sessions/` 下按工作目录分组的目录；遵循 Pi 自己的 `PI_CODING_AGENT_DIR`、`PI_CODING_AGENT_SESSION_DIR` 或 `settings.json` 中的 `sessionDir` 设置。管理页会话列表及 `GET /api/sessions` 的 `sessionFile` 展示具体路径；`saveSessions` 表示该会话是否启用了保存。路径在会话启动时分配，首条消息产生后文件才创建。
+
+关闭、回收会话或重启服务会保留已保存的文件；可用 `picall pi --session /path/to/session.jsonl` 打开历史并继续。PiCall 重启后不会自动恢复原有 HTTP 会话。失败或取消请求时保留 Pi 已写入的条目，尚未完成的流式回复可能不完整。这些历史包含对话和工具内容，独立于不记录正文的运行日志。
 
 ### 兼容范围
 
