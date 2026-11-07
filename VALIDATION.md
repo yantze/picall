@@ -29,13 +29,13 @@
 
 新增 DeepSeek 原生 BYOK 测试：通过持久 provider/model 引用还原模型；强制经 AI.fetch 的 deepseek 网关、default alias，不发送厂商凭证，且携带禁止统一计费回退的请求头。workerd 验证 DeepSeek 模型下搜索/并行读取/补搜、累计用量和最终答案 JSON/SSE。
 
-已实测确认：原 GLM-5.3 Flash 在当前 Workers Free 账户返回 HTTP 403 / 5035；直接调用当前账户的 Llama 3.3 模型成功。DeepSeek 的原生网关真实请求尚未端到端验收，不能将 mock 成功视为上游密钥或余额有效。
+已实测确认：原 GLM-5.3 Flash 在当前 Workers Free 账户返回 HTTP 403 / 5035；直接调用当前账户的 Llama 3.3 模型成功。调用方随后提供的真实 JSON ping 已通过 DeepSeek 原生网关成功返回，finish_reason=stop，用量为输入 677、输出 38、总计 715 token。此证据验证了实际应用链路；模型目录估价不代表真实账单。
 
 ## 尚未执行的真实云端验收
 
-已通过 Cloudflare 插件部署 Worker、启用 workers.dev 地址并核对 AI/DO/鉴权配置，详见 [DEPLOYMENT.md](DEPLOYMENT.md)。以下真实请求验收仍未执行：开发环境网络策略拒绝访问已部署的 workers.dev 域名；搜索密钥名称已在 Worker 配置中确认，但未读取其值或验证有效性。真实搜索尚未验收；DeepSeek BYOK 的真实应用请求仍需验证。
+已通过 Cloudflare 插件部署 Worker、启用 workers.dev 地址并核对 AI/DO/鉴权配置，详见 [DEPLOYMENT.md](DEPLOYMENT.md)。剩余真实请求验收仍需继续：开发环境网络策略拒绝访问已部署的 workers.dev 域名；搜索密钥名称已在 Worker 配置中确认，但未读取其值或验证有效性。DeepSeek BYOK 的真实应用 JSON ping 已通过；真实搜索仍未验收。
 
-1. 已核对 AI binding、SQLite migrations、API_BEARER secret 和 100% 流量发布。接下来补齐第三方 Worker Secrets 和可信 READ_HOSTS，再检查线上强制 API 鉴权。
+1. 已核对 AI binding、SQLite migrations、API_BEARER secret 和 100% 流量发布。API 鉴权和真实 JSON ping 已由调用方验证；接下来验证第三方 Worker Secrets 的有效性并配置可信 READ_HOSTS。
 2. 用真实模型执行多来源问题，确认搜索、读取多个来源、补搜/补读、引用准确性，以及最终正文没有中间说明。记录 prompt、run ID、模型、耗时、累计 usage 和各服务调用次数。
 3. 真实 JSON/SSE、相同 session 的下一轮、首次响应丢失后的幂等重试、同会话并发、断线查询、显式取消；在真实模型调用和真实工具调用期间强制重启/驱逐 DO，验证恢复和已完成结果。
 4. 用服务商测试配置或故障注入验证真实 401/403/429/空结果/超时和 provider 切换。mock 测试并不能证明真实密钥有效或服务不会改变合同。

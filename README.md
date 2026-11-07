@@ -46,7 +46,7 @@ npx wrangler deploy
 
 BRAVE_BASE_URL 默认 `https://brave.vastiny.com/res/v1`，TAVILY_BASE_URL 默认 `https://tavily.vastiny.com`。密钥仅加入对应服务请求头；页面读取和自定义工具不会收到搜索密钥。Jina key 仅用于 r.jina.ai。自定义 base URL 是部署方的可信配置，不能来自客户端或模型参数。
 
-已通过 Cloudflare 插件发布 Worker 并配置独立 API_BEARER；第三方搜索密钥尚未配置，真实模型和搜索调用尚未验收。当前开发环境仍限制 workers.dev 出站请求，因此发布后的 HTTP 验收尚未完成。部署环境需允许 Cloudflare API/Workers AI、上述两个搜索代理、api.search.tinyfish.ai、api.fetch.tinyfish.ai、api.exa.ai（可选）、r.jina.ai，以及 READ_HOSTS 目标和允许的跳转域名。云端开发环境的出站白名单和部署 Worker 的网络是两回事。
+已通过 Cloudflare 插件发布 Worker 并配置独立 API_BEARER；第三方搜索密钥尚未配置，真实 DeepSeek JSON ping 已成功，真实搜索与多轮工具调用尚未验收。当前开发环境仍限制 workers.dev 出站请求，因此发布后的 HTTP 验收尚未完成。部署环境需允许 Cloudflare API/Workers AI、上述两个搜索代理、api.search.tinyfish.ai、api.fetch.tinyfish.ai、api.exa.ai（可选）、r.jina.ai，以及 READ_HOSTS 目标和允许的跳转域名。云端开发环境的出站白名单和部署 Worker 的网络是两回事。
 
 ## API
 
