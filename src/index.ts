@@ -1,7 +1,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import { Lifecycle, type LifecycleJobContext } from 'agents/lifecycle';
 import { PiHarness } from 'agents/harness/pi';
-import { createAI } from 'agents/models/pi-ai';
+import { createModelRuntime, supportsModel } from './models';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { Harness } from '@earendil-works/pi-durable';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
@@ -19,13 +19,10 @@ import {
   type Input,
 } from './core';
 import { WebTools, type ToolEnv } from './tools';
-export interface Env extends ToolEnv {
-  AI: Ai;
-  MODEL: string;
+export interface Env extends WorkerBindings, ToolEnv {
   API_BEARER: string;
-  SESSIONS: DurableObjectNamespace;
-  KEYS: DurableObjectNamespace;
 }
+
 const TTL = 7 * 86400000;
 type Run = {
   id: string;
@@ -86,7 +83,7 @@ export class RequestKey extends DurableObject<Env> {
   }
 }
 export class SearchSession extends DurableObject<Env> {
-  ai = createAI({ binding: this.env.AI });
+  modelRuntime = createModelRuntime(this.env);
   web = new WebTools(this.env, this.ctx.storage, async () => {
     const id = await this.ctx.storage.get<string>('active');
     const run = id ? await this.ctx.storage.get<Run>('run:' + id) : undefined;
@@ -98,7 +95,7 @@ export class SearchSession extends DurableObject<Env> {
   harness = new PiHarness({
     harness: ({ storage, context, onWake }) => {
       const models = createModels();
-      models.setProvider(this.ai.provider);
+      models.setProvider(this.modelRuntime.provider);
       return Harness.open(
         storage,
         { models, registry: this.registry, onWake },
@@ -106,7 +103,7 @@ export class SearchSession extends DurableObject<Env> {
       );
     },
     defaults: {
-      model: this.ai(this.env.MODEL as `@cf/${string}`),
+      model: this.modelRuntime.model,
       maxTurns: 8,
     },
   });
@@ -226,7 +223,14 @@ export class SearchSession extends DurableObject<Env> {
     await this.ctx.storage.put('run:' + run.id, run);
     const conversation = await this.harness.conversation('1');
     await conversation.configure(
-      { instructions: prepared.system, maxTurns: 8 },
+      {
+        instructions: prepared.system,
+        maxTurns: 8,
+        model: {
+          provider: this.modelRuntime.model.provider,
+          modelId: this.modelRuntime.model.id,
+        },
+      },
       BG,
     );
     const prompt =
@@ -341,7 +345,7 @@ const sessionPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 export async function route(request: Request, env: Env): Promise<Response> {
   try {
     if (!env.API_BEARER) fail('api_auth_not_configured', 503);
-    if (!env.MODEL.startsWith('@cf/')) fail('workers_ai_model_required', 503);
+    if (!supportsModel(env.MODEL)) fail('unsupported_model_configuration', 503);
     const supplied = request.headers.get('authorization') || '';
     if ((await hash(supplied)) !== (await hash('Bearer ' + env.API_BEARER)))
       fail('invalid_api_key', 401);

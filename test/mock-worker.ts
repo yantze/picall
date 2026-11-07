@@ -25,6 +25,10 @@ export class SearchSession extends Base {
   }
   constructor(ctx: any, env: any) {
     const fakeAI = {
+      fetch: async (_url: string, init: RequestInit) =>
+        fakeAI.run('deepseek-flash', JSON.parse(init.body as string), {
+          signal: init.signal,
+        }),
       run: async (_model: string, input: any, options: any) => {
         const prompt = JSON.stringify(input.messages);
         if (prompt.includes('slow'))

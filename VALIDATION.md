@@ -7,7 +7,7 @@
 | 检查 | 结果 |
 | --- | --- |
 | npm run check | TypeScript 通过 |
-| npm test | 20/20 通过（含 3 个 workerd 集成场景） |
+| npm test | 23/23 通过（含 4 个 workerd 集成场景） |
 | npm run build | Wrangler 生产入口 dry-run 成功；约 2.50 MiB / gzip 500 KiB；仅构建检查；实际发布见 DEPLOYMENT.md |
 | git diff --check | 通过 |
 
@@ -15,7 +15,7 @@
 
 固定依赖：agents 0.33.0，pi-ai/pi-durable/pi-schema/chord 1.5.0（lockfile）；Wrangler 4.158.0，匹配 Miniflare 5.20261104.0-beta / Workers types 5.20261107.1。研究版本与当前注册表的工具链有差异：原尝试的 Wrangler 4.76.0 本地 workerd 无法向 Lifecycle 提供 DO name，因此更新为实际可用且匹配的工具链。Pi 执行层 API 与交接方案一致。
 
-20 项自动测试覆盖：
+23 项自动测试覆盖：
 
 - 文本规范化、客户端 tools 拒绝、历史一致性、请求体大小限制；跨模型/轮次用量差值和缓存 token。
 - Brave → Tavily → TinyFish 的 429/503 切换，401/403/400 不切换，凭证缺失、合法空结果、显式 Exa、用户取消与任务截止。
@@ -27,9 +27,13 @@
 
 这些集成测试的模型是测试代码模拟的 Workers AI SSE 响应，所有搜索和正文 HTTP 都由测试替身返回；它们验证执行与协议合同，不代表真实模型的研究质量、真实网络可达性或第三方合同已在线验收。运行时恢复测试是本地 workerd teardown/reopen，不等同生产 DO 强杀/平台驱逐。测试配置与测试专用控制路由不进入生产入口。
 
+新增 DeepSeek 原生 BYOK 测试：通过持久 provider/model 引用还原模型；强制经 AI.fetch 的 deepseek 网关、default alias，不发送厂商凭证，且携带禁止统一计费回退的请求头。workerd 验证 DeepSeek 模型下搜索/并行读取/补搜、累计用量和最终答案 JSON/SSE。
+
+已实测确认：原 GLM-5.3 Flash 在当前 Workers Free 账户返回 HTTP 403 / 5035；直接调用当前账户的 Llama 3.3 模型成功。DeepSeek 的原生网关真实请求尚未端到端验收，不能将 mock 成功视为上游密钥或余额有效。
+
 ## 尚未执行的真实云端验收
 
-已通过 Cloudflare 插件部署 Worker、启用 workers.dev 地址并核对 AI/DO/鉴权配置，详见 [DEPLOYMENT.md](DEPLOYMENT.md)。以下真实请求验收仍未执行：开发环境网络策略拒绝访问已部署的 workers.dev 域名；第三方搜索密钥尚未配置。未调用真实模型或搜索服务。
+已通过 Cloudflare 插件部署 Worker、启用 workers.dev 地址并核对 AI/DO/鉴权配置，详见 [DEPLOYMENT.md](DEPLOYMENT.md)。以下真实请求验收仍未执行：开发环境网络策略拒绝访问已部署的 workers.dev 域名；搜索密钥名称已在 Worker 配置中确认，但未读取其值或验证有效性。真实搜索尚未验收；DeepSeek BYOK 的真实应用请求仍需验证。
 
 1. 已核对 AI binding、SQLite migrations、API_BEARER secret 和 100% 流量发布。接下来补齐第三方 Worker Secrets 和可信 READ_HOSTS，再检查线上强制 API 鉴权。
 2. 用真实模型执行多来源问题，确认搜索、读取多个来源、补搜/补读、引用准确性，以及最终正文没有中间说明。记录 prompt、run ID、模型、耗时、累计 usage 和各服务调用次数。

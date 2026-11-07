@@ -14,12 +14,12 @@ const bindings = {
   READ_HOSTS: '["example.com"]',
   HTTP_TOOLS: '[]',
 };
-const options = (persist: string) => ({
+const options = (persist: string, extra: Record<string, string> = {}) => ({
   ...convertV4MiniflareOptions({
     modules: [{ type: 'ESModule' as const, path: 'test-dist/mock-worker.js' }],
     compatibilityDate: '2026-11-07',
     compatibilityFlags: ['nodejs_compat'],
-    bindings,
+    bindings: { ...bindings, ...extra },
     durableObjects: {
       SESSIONS: { className: 'SearchSession', useSQLite: true },
       KEYS: { className: 'RequestKey', useSQLite: true },
@@ -262,6 +262,53 @@ test(
       assert.equal(result.status, 'failed');
       assert.equal(result.error.code, 'deadline_exceeded');
       assert.equal(result.completion, undefined);
+    } finally {
+      await mf.dispose();
+      await rm(dir, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  'workerd: DeepSeek BYOK gateway runs managed tools and final-only JSON/SSE',
+  { timeout: 60000 },
+  async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'picall-deepseek-'));
+    const mf = new Miniflare(
+      options(dir, { MODEL: 'deepseek-flash', AI_GATEWAY_ID: 'deepseek' }),
+    );
+    try {
+      const models: any = await (await req(mf, '/v1/models')).json();
+      assert.equal(models.data[0].id, 'deepseek-flash');
+      const response = await req(mf, '/v1/chat/completions', {
+        model: 'deepseek-flash',
+        messages: [{ role: 'user', content: 'research' }],
+      });
+      assert.equal(response.status, 200, await response.clone().text());
+      const data: any = await response.json();
+      assert.equal(data.model, 'deepseek-flash');
+      assert.equal(
+        data.choices[0].message.content,
+        'Final answer [source](https://example.com/article)',
+      );
+      assert.equal(data.usage.total_tokens, 60);
+      const streamed = await req(mf, '/v1/chat/completions', {
+        messages: [{ role: 'user', content: 'research' }],
+        stream: true,
+      });
+      const text = await streamed.text();
+      assert.match(text, /Final answer/);
+      assert.doesNotMatch(text, /Intermediate research/);
+      assert.match(text, /\[DONE\]/);
+      assert.equal(
+        (
+          await req(mf, '/v1/chat/completions', {
+            model: '@cf/zai-org/glm-5.3-flash',
+            messages: [{ role: 'user', content: 'hello' }],
+          })
+        ).status,
+        404,
+      );
     } finally {
       await mf.dispose();
       await rm(dir, { recursive: true, force: true });
