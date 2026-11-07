@@ -1,6 +1,20 @@
 # Workers 发布记录
 
-## 当前部署：DeepSeek BYOK
+## 当前部署：搜索修复与不限地址读取
+
+发布时间：2026-11-08 02:34:19（Asia/Shanghai）。
+
+- 源码提交：`11cc290ec639756fb91a33282f26cbadf6118372`
+- Worker version：`8b848067-fb04-4a0f-8581-f31a7ea3e896`
+- Deployment：`65c33e3a-9ce8-403d-9aeb-a71f8d85ff5b`，流量 100%。
+- 服务地址、DeepSeek 模型/网关、API_BEARER 和搜索 Secrets 保持原配置。
+- 修复把全局 fetch 绑定到 WebTools 实例而引发的请求接收者错误；真实 workerd 回归已验证修复前没有出站请求，修复后收到预期请求。
+- 按用户要求取消域名、IP、端口白名单，允许所有 HTTP/HTTPS 网页地址及跨站重定向；线上 READ_HOSTS 已删除。保留 URL 解析/协议、响应大小、跳转次数、总截止与取消控制。
+- 增加不含密钥/查询正文的 provider/status 诊断、搜索 fallback 轨迹，以及 Asia/Shanghai 日期上下文和避免重复尝试已耗尽 provider 的提示。
+- 26 项自动测试、生成类型同步、TypeScript 和生产 dry-run 通过；真实天气搜索/读取仍待调用方重发请求验收。
+- bundle SHA-256：`8c8e1c95206db99df9fd9edb908cac1d2816030a873879bce1e0211406d20f7f`。
+
+## DeepSeek BYOK 接入记录（历史）
 
 发布时间：2026-11-08 02:07:49（Asia/Shanghai）。
 
