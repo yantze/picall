@@ -4,6 +4,10 @@
 
 本分支是独立仓库布局：源码、测试、package.json 和 Wrangler 配置均位于根目录，可直接安装和部署。
 
+## 当前部署
+
+已发布到 [picall-agent-search.vastiny.workers.dev](https://picall-agent-search.vastiny.workers.dev)。Workers AI、两个 SQLite Durable Object 和 API_BEARER 已配置。搜索服务密钥及 READ_HOSTS 仍需配置；未完成真实搜索与模型端到端验收。发布版本、验证范围与限制见 [DEPLOYMENT.md](DEPLOYMENT.md)。
+
 ## 执行架构
 
 官方 API 以安装包中 `agents/docs/harnesses/pi.md`、`docs/lifecycle.md`、`docs/models-pi-ai.md` 和 `.d.ts` 核对。Pi 工厂传递 onWake；Lifecycle 管理恢复、任务监督和清理作业，共用物理 alarm。公开 npm `pi-web-access@0.47.0` 的 TinyFish 源码用于核对 query/page、批量 urls/markdown 及 results[].text 合同，没有复制整份插件或其宿主依赖。
@@ -40,7 +44,7 @@ npx wrangler deploy
 
 BRAVE_BASE_URL 默认 `https://brave.vastiny.com/res/v1`，TAVILY_BASE_URL 默认 `https://tavily.vastiny.com`。密钥仅加入对应服务请求头；页面读取和自定义工具不会收到搜索密钥。Jina key 仅用于 r.jina.ai。自定义 base URL 是部署方的可信配置，不能来自客户端或模型参数。
 
-本次云端环境没有任何 Secrets，也没有第三方服务/Cloudflare API 的出站授权配置；没有部署，也没有发起真实模型或搜索调用。部署环境需允许 Cloudflare API/Workers AI、上述两个搜索代理、api.search.tinyfish.ai、api.fetch.tinyfish.ai、api.exa.ai（可选）、r.jina.ai，以及 READ_HOSTS 目标和允许的跳转域名。云端开发环境的出站白名单和部署 Worker 的网络是两回事。
+已通过 Cloudflare 插件发布 Worker 并配置独立 API_BEARER；第三方搜索密钥尚未配置，真实模型和搜索调用尚未验收。当前开发环境仍限制 workers.dev 出站请求，因此发布后的 HTTP 验收尚未完成。部署环境需允许 Cloudflare API/Workers AI、上述两个搜索代理、api.search.tinyfish.ai、api.fetch.tinyfish.ai、api.exa.ai（可选）、r.jina.ai，以及 READ_HOSTS 目标和允许的跳转域名。云端开发环境的出站白名单和部署 Worker 的网络是两回事。
 
 ## API
 

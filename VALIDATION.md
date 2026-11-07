@@ -8,7 +8,7 @@
 | --- | --- |
 | npm run check | TypeScript 通过 |
 | npm test | 20/20 通过（含 3 个 workerd 集成场景） |
-| npm run build | Wrangler 生产入口 dry-run 成功；约 2.50 MiB / gzip 500 KiB；未上传部署 |
+| npm run build | Wrangler 生产入口 dry-run 成功；约 2.50 MiB / gzip 500 KiB；仅构建检查；实际发布见 DEPLOYMENT.md |
 | git diff --check | 通过 |
 
 分支以单个根提交发布，仅包含 Cloudflare 源码、测试、锁文件、CI、部署文档与 MIT 许可证，不继承旧提交历史。
@@ -29,9 +29,9 @@
 
 ## 尚未执行的真实云端验收
 
-当前环境没有 Secrets 或 Cloudflare 部署身份；未部署 Worker，未调用真实 Workers AI、Brave、Tavily、TinyFish、Exa 或 Jina。
+已通过 Cloudflare 插件部署 Worker、启用 workers.dev 地址并核对 AI/DO/鉴权配置，详见 [DEPLOYMENT.md](DEPLOYMENT.md)。以下真实请求验收仍未执行：开发环境网络策略拒绝访问已部署的 workers.dev 域名；第三方搜索密钥尚未配置。未调用真实模型或搜索服务。
 
-1. 在部署方提供 Cloudflare 账户权限和 Worker Secrets 后，配置可信 READ_HOSTS，部署到独立测试 Worker。检查 AI binding、SQLite migrations 和强制 API 鉴权。
+1. 已核对 AI binding、SQLite migrations、API_BEARER secret 和 100% 流量发布。接下来补齐第三方 Worker Secrets 和可信 READ_HOSTS，再检查线上强制 API 鉴权。
 2. 用真实模型执行多来源问题，确认搜索、读取多个来源、补搜/补读、引用准确性，以及最终正文没有中间说明。记录 prompt、run ID、模型、耗时、累计 usage 和各服务调用次数。
 3. 真实 JSON/SSE、相同 session 的下一轮、首次响应丢失后的幂等重试、同会话并发、断线查询、显式取消；在真实模型调用和真实工具调用期间强制重启/驱逐 DO，验证恢复和已完成结果。
 4. 用服务商测试配置或故障注入验证真实 401/403/429/空结果/超时和 provider 切换。mock 测试并不能证明真实密钥有效或服务不会改变合同。
