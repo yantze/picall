@@ -53,7 +53,12 @@ export class SearchSession extends Base {
           function: { name, arguments: JSON.stringify(args) },
         });
         let delta: any;
-        if (count === 0 || prompt.includes('exhaust')) {
+        if (
+          count === 0 ||
+          input.messages.some(
+            (m: any) => m.role === 'user' && m.content === 'exhaust',
+          )
+        ) {
           delta = {
             content: 'Intermediate research plan',
             tool_calls: [call('web_search', { query: 'research' })],
@@ -112,26 +117,28 @@ export class SearchSession extends Base {
         const run: any = await this.ctx.storage.get('run:' + id);
         return { id: run.id, deadline: run.deadline };
       },
-      async (url: any) => {
-        if (String(url).startsWith('https://r.jina.ai/')) {
-          if (String(url).includes('toolpause'))
-            await new Promise((resolve) => setTimeout(resolve, 3000));
-          return new Response('Verified source body', {
-            headers: { 'Content-Type': 'text/plain' },
-          });
-        }
-        return Response.json({
-          web: {
-            results: [
-              {
-                url: 'https://example.com/article',
-                title: 'Source',
-                description: 'Summary',
+      env.USE_GLOBAL_FETCH === '1'
+        ? fetch
+        : async (url: any) => {
+            if (String(url).startsWith('https://r.jina.ai/')) {
+              if (String(url).includes('toolpause'))
+                await new Promise((resolve) => setTimeout(resolve, 3000));
+              return new Response('Verified source body', {
+                headers: { 'Content-Type': 'text/plain' },
+              });
+            }
+            return Response.json({
+              web: {
+                results: [
+                  {
+                    url: 'https://example.com/article',
+                    title: 'Source',
+                    description: 'Summary',
+                  },
+                ],
               },
-            ],
+            });
           },
-        });
-      },
     );
     this.registry = this.web.registry();
   }

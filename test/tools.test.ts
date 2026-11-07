@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { WebTools, safeURL, boundedText } from '../src/tools';
+import { WebTools, parseWebURL, boundedText } from '../src/tools';
 const env = {
   BRAVE_KEY: 'b',
   TAVILY_KEY: 't',
@@ -8,7 +8,6 @@ const env = {
   EXA_KEY: 'e',
   BRAVE_BASE_URL: 'https://brave.vastiny.com/res/v1',
   TAVILY_BASE_URL: 'https://tavily.vastiny.com',
-  READ_HOSTS: '["example.com"]',
   HTTP_TOOLS: '[]',
 };
 function setup(net: any, extra: any = {}) {
@@ -115,19 +114,24 @@ test('fetch uses Jina then TinyFish with batch markdown contract and persistent 
     7,
   );
 });
-test('HTTP fallback validates redirect destination and rejects types and oversized bodies', async () => {
-  let calls = 0;
-  const { web } = setup(async () => {
-    calls++;
-    return calls < 3
-      ? new Response('', { status: 503 })
-      : new Response('', {
-          status: 302,
-          headers: { Location: 'https://127.0.0.1/' },
-        });
+test('HTTP fallback follows redirects across arbitrary HTTP/HTTPS hosts and retains body limits', async () => {
+  const urls: string[] = [];
+  const { web } = setup(async (url: string) => {
+    urls.push(url);
+    if (urls.length < 3) return new Response('', { status: 503 });
+    if (urls.length === 3)
+      return new Response('', {
+        status: 302,
+        headers: { Location: 'http://127.0.0.1:8080/redirected' },
+      });
+    return new Response('redirected source', {
+      headers: { 'Content-Type': 'text/plain' },
+    });
   });
-  await assert.rejects(web.content('https://example.com'), /unsafe_url/);
-  assert.equal(calls, 3);
+  const result = await web.content('https://unlisted.example.org/source');
+  assert.equal(result.provider, 'http');
+  assert.equal(result.text, 'redirected source');
+  assert.equal(urls[3], 'http://127.0.0.1:8080/redirected');
   await assert.rejects(
     boundedText(
       new Response('x', {
@@ -136,16 +140,25 @@ test('HTTP fallback validates redirect destination and rejects types and oversiz
     ),
     /response_too_large/,
   );
+});
+test('web URLs have no host, IP, port or whitelist restrictions', () => {
   for (const url of [
     'http://example.com',
     'https://127.1',
     'https://[::1]',
-    'https://example.com@localhost',
+    'https://user:pass@localhost',
     'https://example.com:8443',
-    'https://other.com',
+    'http://internal.local:8080/page',
+    'https://unlisted.example.org',
   ])
-    assert.throws(() => safeURL(url, ['example.com']), /unsafe_url/);
+    assert.ok(parseWebURL(url));
+  assert.throws(() => parseWebURL('not-a-url'), /invalid_url/);
+  assert.throws(
+    () => parseWebURL('file:///etc/passwd'),
+    /unsupported_url_scheme/,
+  );
 });
+
 test('deadline stops network activity', async () => {
   let calls = 0;
   const web = new WebTools(
@@ -199,7 +212,7 @@ test('explicit Exa carries date and domains without fallback', async () => {
     domains: ['example.com'],
   });
 });
-test('unsafe final URL and unsupported MIME stop fetch fallback', async () => {
+test('non-HTTP final URL and unsupported MIME stop fetch fallback', async () => {
   let calls = 0;
   const { web } = setup(async () => {
     calls++;
@@ -217,13 +230,16 @@ test('unsafe final URL and unsupported MIME stop fetch fallback', async () => {
       results: [
         {
           url: 'https://example.com',
-          final_url: 'https://localhost',
+          final_url: 'file:///etc/passwd',
           text: 'body',
         },
       ],
     });
   });
-  await assert.rejects(second.web.content('https://example.com'), /unsafe_url/);
+  await assert.rejects(
+    second.web.content('https://example.com'),
+    /unsupported_url_scheme/,
+  );
 });
 test('parallel managed tools retain both request counts and custom tools fail closed', async () => {
   const { web, map } = setup(
@@ -255,12 +271,32 @@ test('parallel managed tools retain both request counts and custom tools fail cl
         HTTP_TOOLS: JSON.stringify([
           {
             name: 'lookup',
-            url: 'https://localhost',
+            url: 'file:///etc/passwd',
             description: 'bad URL',
             parameters: { type: 'object' },
           },
         ]),
       }).web.registry(),
-    /unsafe_url/,
+    /unsupported_url_scheme/,
   );
+});
+
+test('search failures include safe provider/status diagnostics and fallback trail', async () => {
+  const { web } = setup(
+    async () =>
+      new Response('provider response may contain secrets', { status: 429 }),
+  );
+  await assert.rejects(web.search({ query: 'q' }), (error: any) => {
+    assert.equal(error.code, 'provider_unavailable');
+    assert.deepEqual(
+      error.details.attempts.map((a: any) => [a.provider, a.upstream_status]),
+      [
+        ['brave', 429],
+        ['tavily', 429],
+        ['tinyfish', 429],
+      ],
+    );
+    assert.doesNotMatch(error.message, /provider response may contain secrets/);
+    return true;
+  });
 });

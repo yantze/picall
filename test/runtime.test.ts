@@ -11,7 +11,6 @@ const bindings = {
   TAVILY_BASE_URL: 'https://tavily.vastiny.com',
   BRAVE_KEY: 'mock',
   TINYFISH_KEY: 'mock',
-  READ_HOSTS: '["example.com"]',
   HTTP_TOOLS: '[]',
 };
 const options = (persist: string, extra: Record<string, string> = {}) => ({
@@ -309,6 +308,54 @@ test(
         ).status,
         404,
       );
+    } finally {
+      await mf.dispose();
+      await rm(dir, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  'workerd: managed tools use the real global fetch receiver',
+  { timeout: 30000 },
+  async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'picall-global-fetch-'));
+    let outbound = 0;
+    const config = options(dir, { USE_GLOBAL_FETCH: '1' });
+    const mf = new Miniflare({
+      ...config,
+      workers: config.workers.map((worker) => ({
+        ...worker,
+        dev: {
+          ...worker.dev,
+          outboundService: {
+            type: 'fetcher' as const,
+            handler: async (request: Request) => {
+              outbound++;
+              if (new URL(request.url).hostname === 'r.jina.ai')
+                return new Response('Source body', {
+                  headers: { 'Content-Type': 'text/plain' },
+                });
+              return Response.json({
+                web: {
+                  results: [
+                    { url: 'https://example.com/article', title: 'Source' },
+                  ],
+                },
+              });
+            },
+          },
+        },
+      })),
+    });
+    try {
+      const accepted: any = await (
+        await req(mf, '/v1/runs', { prompt: 'research' })
+      ).json();
+      const run = await settled(mf, accepted.id);
+      assert.equal(run.status, 'succeeded', JSON.stringify(run));
+      assert.equal(outbound, 4, JSON.stringify(run));
+      assert.deepEqual(run.service_calls, { brave: 2, jina: 2 });
     } finally {
       await mf.dispose();
       await rm(dir, { recursive: true, force: true });

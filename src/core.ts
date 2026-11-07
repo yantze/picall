@@ -2,8 +2,9 @@ export class Fault extends Error {
   constructor(
     public code: string,
     public status = 400,
+    public details?: Record<string, unknown>,
   ) {
-    super(code);
+    super(details ? `${code} ${JSON.stringify(details)}` : code);
   }
 }
 export function fail(code: string, status = 400): never {
