@@ -1,0 +1,16 @@
+{
+  "name": "picall-agent-search",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-07",
+  "compatibility_flags": ["nodejs_compat"],
+  "ai": {"binding": "AI"},
+  "durable_objects": {"bindings": [{"name":"SESSIONS","class_name":"SearchSession"},{"name":"KEYS","class_name":"RequestKey"}]},
+  "migrations": [{"tag":"v1","new_sqlite_classes":["SearchSession","RequestKey"]}],
+  "vars": {
+    "MODEL": "@cf/zai-org/glm-5.3-flash",
+    "BRAVE_BASE_URL": "https://brave.vastiny.com/res/v1",
+    "TAVILY_BASE_URL": "https://tavily.vastiny.com",
+    "READ_HOSTS": "[]",
+    "HTTP_TOOLS": "[]"
+  }
+}
