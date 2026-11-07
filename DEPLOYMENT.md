@@ -1,5 +1,27 @@
 # Workers 发布记录
 
+## 当前部署：DeepSeek BYOK
+
+发布时间：2026-11-08 02:07:49（Asia/Shanghai）。
+
+- 服务地址：https://picall-agent-search.vastiny.workers.dev
+- 源码提交：`3efcc25fb94e681e7ae8492ee1f12057e69e2b67`（Cloudflare 分支）
+- Worker version：`9f480bb9-4c98-4b19-9aba-ff2a4200ecc5`
+- Deployment：`be55926c-c720-4034-95f6-cfced0f5f162`，流量 100%。
+- 配置：`MODEL=deepseek-flash`、`AI_GATEWAY_ID=deepseek`。
+- 原生调用 DeepSeek，使用网关中已存在的 `default` BYOK 密钥；不把密钥复制到源码或 Worker，并禁止统一计费回退。
+- 原有 API_BEARER、搜索 Secrets、普通变量和两个 DO namespace 均从线上最新版本继承，namespace ID 未改变。
+- 已开启 Workers Logs 和 1% 采样的 Traces。
+- bundle SHA-256：`b22a3778ca639bed54d2b78628265aabc31fed2496d754e7300b59030e58e908`。
+
+23 项本地自动测试、绑定类型同步检查、TypeScript 和生产 dry-run 均通过；其中包括 DeepSeek 原生路径、凭证不外传、禁止统一计费、模型引用恢复及完整工具循环 JSON/SSE。Cloudflare API 已核对以上部署和绑定信息。开发执行环境仍无法访问 workers.dev，因此真实 DeepSeek 应用请求还需调用方验收；mock 结果不代表上游密钥或余额已验证。
+
+调用方应省略 model 使用部署默认值，或显式发送 `"model":"deepseek-flash"`。不要继续传旧的 GLM 模型 ID；模型切换后请使用新会话。旧失败 run 不会因配置更新自动重跑。
+
+## 首次发布历史：Workers AI
+
+以下为此前版本的历史记录；当前生效配置以上文为准。
+
 发布时间：2026-11-08 01:35:51（Asia/Shanghai）。
 
 - 服务地址：https://picall-agent-search.vastiny.workers.dev
