@@ -13,7 +13,7 @@ export const DEFAULTS = Object.freeze({
   requestTimeoutSeconds: 300, projectTrust: 'default', saveSessions: false, enableSkills: false,
   toolOverrides: Object.freeze({}), enableExtensions: true, extensionOverrides: Object.freeze({}),
   additionalSystemPrompt: DEFAULT_ADDITIONAL_SYSTEM_PROMPT,
-  modelBaseUrl: 'https://api.deepseek.com/v1', modelApiKey: '', defaultModel: 'deepseek-chat',
+  modelBaseUrl: 'https://api.deepseek.com/v1', modelApiKey: '', defaultModel: 'deepseek-flash',
   modelContextWindow: 131072, modelMaxTokens: 8192,
   enableResearch: true, maxToolRounds: 8,
   braveApiKey: '', tavilyApiKey: '', tinyfishApiKey: '', exaApiKey: '', jinaApiKey: '',

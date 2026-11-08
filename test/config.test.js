@@ -158,7 +158,7 @@ test('old config gains local gateway defaults on load without rewriting an exist
   assert.equal(store.value.apiKey, legacy.apiKey);
   assert.equal(store.public().apiKeyConfigured, true);
   assert.equal(store.value.modelBaseUrl, 'https://api.deepseek.com/v1');
-  assert.equal(store.value.defaultModel, 'deepseek-chat');
+  assert.equal(store.value.defaultModel, 'deepseek-flash');
   assert.equal(store.value.maxToolRounds, 8);
   assert.equal(store.value.enableResearch, true);
   for (const field of ['model', 'effort', 'contextWindow']) assert.equal(Object.hasOwn(store.value, field), false);

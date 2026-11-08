@@ -92,7 +92,7 @@ function restoreRoute() {
 }
 
 function updateCurl() {
-  const body = { model: $('model').value || state.config?.defaultModel || 'deepseek-chat', messages: [{ role: 'user', content: 'Hello, Pi!' }], stream: true };
+  const body = { model: $('model').value || state.config?.defaultModel || 'deepseek-flash', messages: [{ role: 'user', content: 'Hello, Pi!' }], stream: true };
   if ($('effort').value) body.reasoning_effort = $('effort').value;
   const lines = [`curl ${baseUrl()}/chat/completions \\`, '  -H "Content-Type: application/json" \\'];
   if (state.config?.apiKeyConfigured) lines.push('  -H "Authorization: Bearer YOUR_API_KEY" \\');
@@ -104,7 +104,7 @@ function updateCurl() {
 function applyConfig(config) {
   state.config = config;
   $('model-base-url').value = config.modelBaseUrl ?? 'https://api.deepseek.com/v1';
-  $('default-model').value = config.defaultModel ?? 'deepseek-chat';
+  $('default-model').value = config.defaultModel ?? 'deepseek-flash';
   $('model-context-window').value = config.modelContextWindow ?? 131072;
   $('model-max-tokens').value = config.modelMaxTokens ?? 8192;
   $('enable-research').checked = config.enableResearch !== false;
@@ -387,7 +387,7 @@ async function loadModels(userTriggered = false) {
     const result = await api('/api/models');
     const selected = $('model').value;
     const selectedEffort = $('effort').value;
-    const preferred = `picall/${state.config?.defaultModel || 'deepseek-chat'}`;
+    const preferred = `picall/${state.config?.defaultModel || 'deepseek-flash'}`;
     state.models = [...(result.models || [])].sort((a, b) => Number(b.id === preferred) - Number(a.id === preferred));
     const fragment = document.createDocumentFragment();
     state.models.forEach((model) => {

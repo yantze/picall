@@ -17,7 +17,7 @@ npm start
 
 打开 **http://127.0.0.1:8787**，进入「服务设置」：
 
-1. 「模型网关」填写 OpenAI 兼容 **Base URL、模型 API Key、默认模型 ID**。例如直连 DeepSeek：`https://api.deepseek.com/v1`、你的 DeepSeek key、`deepseek-chat`。Base URL 不包含 `/chat/completions`。自建网关填写它提供的地址和真实模型 ID，例如 `deepseek-flash`；仅填写网关名称 `deepseek` 不能连接模型。模型要支持工具调用及 OpenAI SSE 上游输出。
+1. 「模型网关」填写 OpenAI 兼容 **Base URL、模型 API Key、默认模型 ID**。默认模型为 `deepseek-flash`，默认 Base URL 为 `https://api.deepseek.com/v1`。使用自建网关时，填写它提供的地址、对应密钥和真实模型 ID；仅填写网关名称 `deepseek` 不能连接模型。Base URL 不包含 `/chat/completions`。模型要支持工具调用及 OpenAI SSE 上游输出。已保存的模型选择会保留，旧配置可在此修改默认模型并保存。
 2. 「搜索与网页」填写搜索服务的 key。默认顺序是 **Brave → Tavily → TinyFish**，Exa 只供模型显式选择。Brave、Tavily 的 Base URL 可以改为官方地址或兼容代理地址；默认仍使用现有的 `brave.vastiny.com/res/v1` 和 `tavily.vastiny.com`。密钥必须属于对应地址提供的服务。
 3. 保存设置，回到概览刷新模型目录并试运行。配置的模型显示为 `picall/<模型 ID>`。也可在 API 中传短名或省略 `model` 使用默认模型。
 
