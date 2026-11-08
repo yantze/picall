@@ -77,6 +77,42 @@ export function contentIssue(text: string): string | undefined {
 // Preserve the complete original document and its offsets. Only move the first
 // preview past a long, link-only navigation prelude; ordinary articles, JSON,
 // short link lists, code and tables retain their original first page.
+function withoutLinks(line: string) {
+  const parts: string[] = [];
+  let cursor = 0;
+  let links = 0;
+  while (cursor < line.length) {
+    const open = line.indexOf('[', cursor);
+    if (open < 0) break;
+    let end = open + 1;
+    let brackets = 1;
+    for (; end < line.length && brackets; end++) {
+      if (line[end] === '\\') end++;
+      else if (line[end] === '[') brackets++;
+      else if (line[end] === ']') brackets--;
+    }
+    if (brackets) break;
+    if (line[end] !== '(') {
+      parts.push(line.slice(cursor, end));
+      cursor = end;
+      continue;
+    }
+    let close = end + 1;
+    let parentheses = 1;
+    for (; close < line.length && parentheses; close++) {
+      if (line[close] === '\\') close++;
+      else if (line[close] === '(') parentheses++;
+      else if (line[close] === ')') parentheses--;
+    }
+    if (parentheses) break;
+    const start = open > cursor && line[open - 1] === '!' ? open - 1 : open;
+    parts.push(line.slice(cursor, start));
+    links++;
+    cursor = close;
+  }
+  parts.push(line.slice(cursor));
+  return { plain: parts.join(''), links };
+}
 export function previewOffset(text: string) {
   const marker = /^Markdown Content:\s*$/m.exec(text);
   if (!marker) return 0;
@@ -85,13 +121,11 @@ export function previewOffset(text: string) {
   let lastNavigationEnd = start;
   for (const match of text.slice(start).matchAll(/[^\r\n]+/g)) {
     const line = match[0];
-    const positions = [...line.matchAll(/!?\[[^\]]*\]\([^\n)]*\)/g)];
-    const plain = line
-      .replace(/!?\[[^\]]*\]\([^\n)]*\)/g, '')
-      .replace(/[\s*_>`|#-]/g, '');
+    const stripped = withoutLinks(line);
+    const plain = stripped.plain.replace(/[\s*_>`|#-]/g, '');
     const at = start + match.index;
-    if (positions.length && !plain) {
-      links += positions.length;
+    if (stripped.links && !plain) {
+      links += stripped.links;
       lastNavigationEnd = at + line.length;
       continue;
     }
@@ -742,7 +776,10 @@ export class WebTools {
       limit = Math.min(args.limit ?? STORED_PAGE, 20000);
     return {
       ...doc,
-      text: doc.text.slice(offset, offset + limit),
+      text:
+        args.find && found < 0 && args.offset === undefined
+          ? ''
+          : doc.text.slice(offset, offset + limit),
       offset,
       length: doc.text.length,
       found,
@@ -792,7 +829,7 @@ export class WebTools {
       {
         name: 'get_search_content',
         description:
-          'Read a numbered source, page a stored body (default 4000, max 20000 characters), or find a passage. Reuse content IDs instead of fetching again. IDs belong to this run.',
+          'Read a numbered source, page a stored body (default 4000, max 20000 characters), or find a case-insensitive literal substring (not a regex). A missing find returns found=-1 and no text unless offset was explicitly requested. Reuse content IDs instead of fetching again. IDs belong to this run.',
         parameters: stored,
         replay: 'safe',
         execute: async (a, _api, c) =>

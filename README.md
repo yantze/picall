@@ -79,7 +79,7 @@ JSON 等待连接可能被调用方或中间代理超时关闭，使用异步 ru
 
 - `web_search({query, provider?, count?, page?, domains?, freshness?})`：count 默认 3、范围 1–20；每条摘要最多 600 字符。page 1–10（外部 provider 仍有自己的分页上限）；freshness 为 Brave 风格 pd/pw/pm/py。默认严格 Brave → Tavily → TinyFish。网络/读取错误、超时、408/425/5xx、402/429/432 切换；缺凭证、401/403、参数或配置错误直接失败。合法空结果不切换。显式 provider 只用该服务，包括 Exa；没有免费 MCP fallback。Tavily/Exa 暂只支持 page=1，其他分页明确返回错误；freshness 分别映射为 time_range 和 startPublishedDate。domains 支持以 - 前缀排除域名，所有结果再按域名过滤。TinyFish page 映射至从零开始的外部分页，单页服务最多约 10 条，返回量可能小于 count。
 - `fetch_content({url})`：Jina → TinyFish → HTTP；远端失败、超时、无正文及明确的访问拒绝/人机验证页面进入下一项，包括 Jina reader 包装中的 CAPTCHA 警告。非 HTTP(S) 协议、超限、不支持的类型、取消和总截止停止。全部读取失败时返回 content_unavailable 与安全的尝试原因。正文最多 2 MiB；HTTP HTML 使用轻量文本提取，非浏览器级可读性解析。预览最多 6,000 字符，length 表示完整字符数、offset 为原文位置；明确的长链接导航前缀可被跳过，完整原文仍存在 SQLite，可从 offset=0 补读。下一页从 offset + text.length 开始。
-- `get_search_content({search_id?,result_id?,content_id?,find?,offset?,limit?})`：查询编号来源、按结果号读取正文、正文分页和大小写不敏感查找。默认分页 4,000 字符，可显式指定至 20,000。find 未命中时 found=-1。ID 只在当前 run 有效，不跨 run 隐式共享。
+- `get_search_content({search_id?,result_id?,content_id?,find?,offset?,limit?})`：查询编号来源、按结果号读取正文、正文分页和大小写不敏感的字面子串查找（不是正则）。默认分页 4,000 字符，可显式指定至 20,000。find 未命中时 found=-1；没有显式 offset 时 text 为空，避免重复发送不相关正文；显式 offset 仍读取指定页面。ID 只在当前 run 有效，不跨 run 隐式共享。
 
 研究提示按问题复杂度分配工作：简单实时问题先检索一次、阅读 1–2 个相关来源，资料充分后回答；资料不足、过期或冲突时继续查证。复杂研究仍可扩大 count、补搜和多源交叉验证，没有额外的分类模型请求，也没有硬性缩减工具轮数。正文预览缺少目标内容时使用 find/分页。
 

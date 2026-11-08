@@ -408,6 +408,23 @@ test('short body previews retain full persisted text for tail lookup after reope
   });
   assert.equal(tail.found, 22000);
   assert.match(tail.text, /TAIL weather 15 degrees/);
+  const missing = await reopened.stored({
+    content_id: first.content_id,
+    find: 'absent phrase',
+  });
+  assert.equal(missing.found, -1);
+  assert.equal(missing.text, '');
+  assert.equal(
+    (
+      await reopened.stored({
+        content_id: first.content_id,
+        find: 'absent phrase',
+        offset: 0,
+        limit: 12,
+      })
+    ).text,
+    body.slice(0, 12),
+  );
   assert.equal(
     (await reopened.stored({ content_id: first.content_id, limit: 20000 })).text
       .length,
@@ -521,11 +538,17 @@ test('challenge detection rejects reader errors and challenge pages without reje
 });
 
 test('a long reader navigation prelude is skipped without changing stored text or original offsets', async () => {
-  const navigation = Array.from(
-    { length: 50 },
-    (_, i) =>
-      `[City ${i}](https://example.com/weather/some-very-long-navigation-path/${i})`,
-  ).join('\n');
+  const navigation =
+    Array.from(
+      { length: 40 },
+      (_, i) => `[City ${i}](javascript:void(0); "City ${i}")`,
+    ).join('') +
+    '\n[![Image](https://example.com/banner.png)](https://example.com/home)\n' +
+    Array.from(
+      { length: 50 },
+      (_, i) =>
+        `[City ${i}](https://example.com/weather/some-very-long-navigation-path/${i})`,
+    ).join('\n');
   const body = `Title: Today\nURL Source: https://example.com\n\nMarkdown Content:\n${navigation}\n\n09:30 report\n\n# Today\nRain, 12-19 degrees\n${'Forecast detail '.repeat(800)}`;
   const { web } = setup(async () => new Response(body));
   const doc = await web.content('https://example.com');
