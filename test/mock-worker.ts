@@ -31,9 +31,16 @@ export class SearchSession extends Base {
         }),
       run: async (_model: string, input: any, options: any) => {
         const prompt = JSON.stringify(input.messages);
-        if (prompt.includes('slow'))
+        const delay =
+          prompt.includes('heartbeat research') &&
+          !input.messages.some((m: any) => m.role === 'tool')
+            ? 16000
+            : prompt.includes('slow')
+              ? 3000
+              : 0;
+        if (delay)
           await new Promise((resolve, reject) => {
-            const timer = setTimeout(resolve, 3000);
+            const timer = setTimeout(resolve, delay);
             options.signal?.addEventListener(
               'abort',
               () => {

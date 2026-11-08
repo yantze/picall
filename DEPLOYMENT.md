@@ -1,6 +1,23 @@
 # Workers 发布记录
 
-## 当前部署：搜索修复与不限地址读取
+## 当前部署：自动平衡研究性能优化
+
+发布时间：2026-11-08 09:38:22（Asia/Shanghai）。
+
+- 源码提交：`86d530f50267d8e1c10aa8c498994482f942ccba`（Cloudflare 分支）。
+- Worker version：`af4fb00d-0c81-4a31-b450-6f99c3601ff7`。
+- Deployment：`bb49627b-20b0-451b-806d-b80ec0e941de`，流量 100%。
+- 服务地址：https://picall-agent-search.vastiny.workers.dev
+- 简单问题优先一次搜索和少量来源，复杂问题继续补查；默认 3 条结果、600 字符摘要、6,000 字符正文预览、4,000 字符默认分页，完整正文仍可查找/分页。
+- 明确的人机验证/拒绝访问页面进入 reader fallback；同 run 的重复搜索与网页读取使用持久缓存，并发重复请求合并，各等待者独立取消。
+- JSON/SSE 从外层每秒轮询改为内部最长 15 秒的 PiHarness.wait；等待不持有会话锁，Lifecycle 继续监督与恢复。增加不含查询、正文和凭证的性能日志。
+- 33 项自动测试（含 6 个 workerd 集成场景）、生成类型同步、TypeScript 和 minified 生产 dry-run 通过。
+- 所有线上绑定按名称继承；原有 API_BEARER/搜索 Secrets、DeepSeek 网关、两个 DO namespace、兼容日期与日志设置保留，migration tag 仍为 v1。
+- bundle：1,117,553 bytes；SHA-256：`5c9e0802ff12ff8f87c7f68006c421b6b800a2b3cad7f7f5f843fbc1ad21b659`。
+
+本轮真实云端探针正在采集三次天气和一次复杂研究的结果。探针仅有 scheduled handler，通过已有 namespace 调用线上 DO，没有公网 HTTP 路由或密钥绑定；验证结束后删除。它不替代公网 API 入口和客户端端到端网络耗时测试。
+
+## 搜索修复与不限地址读取（历史）
 
 发布时间：2026-11-08 02:34:19（Asia/Shanghai）。
 

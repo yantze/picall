@@ -439,3 +439,32 @@ test(
     }
   },
 );
+
+test(
+  'workerd: SSE remains alive across a 15-second long-wait timeout',
+  { timeout: 30000 },
+  async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'picall-heartbeat-'));
+    const mf = new Miniflare(options(dir));
+    try {
+      const streamed = await req(mf, '/v1/chat/completions', {
+        messages: [{ role: 'user', content: 'heartbeat research' }],
+        stream: true,
+        stream_options: { include_usage: true },
+      });
+      assert.equal(streamed.status, 200);
+      const text = await streamed.text();
+      assert.ok(
+        (text.match(/: heartbeat/g) || []).length >= 2,
+        'a quiet model must receive another heartbeat after the first wait expires',
+      );
+      assert.match(text, /Final answer/);
+      assert.match(text, /total_tokens":60/);
+      assert.match(text, /\[DONE\]/);
+      assert.doesNotMatch(text, /Intermediate research/);
+    } finally {
+      await mf.dispose();
+      await rm(dir, { recursive: true, force: true });
+    }
+  },
+);

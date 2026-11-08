@@ -1,6 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { WebTools, parseWebURL, boundedText, contentIssue } from '../src/tools';
+import {
+  WebTools,
+  parseWebURL,
+  boundedText,
+  contentIssue,
+  previewOffset,
+} from '../src/tools';
 const env = {
   BRAVE_KEY: 'b',
   TAVILY_KEY: 't',
@@ -478,6 +484,12 @@ test('challenge detection rejects reader errors and challenge pages without reje
   assert.equal(contentIssue(blocked), 'upstream_error_page');
   assert.equal(
     contentIssue(
+      'Title: WEB 应用防火墙\nURL Source: http://example.com\nWarning: This page maybe requiring CAPTCHA, please make sure you are authorized to access this page.\n\nMarkdown Content:\n当前正在对访问请求进行人机识别检测，请稍等片刻\n向右滑动填充拼图',
+    ),
+    'access_challenge',
+  );
+  assert.equal(
+    contentIssue(
       '<html><title>Just a moment...</title><body>Checking your browser</body></html>',
     ),
     'access_challenge',
@@ -506,6 +518,56 @@ test('challenge detection rejects reader errors and challenge pages without reje
     'tinyfish_fetch',
   );
   assert.equal(calls, 2);
+});
+
+test('a long reader navigation prelude is skipped without changing stored text or original offsets', async () => {
+  const navigation = Array.from(
+    { length: 50 },
+    (_, i) =>
+      `[City ${i}](https://example.com/weather/some-very-long-navigation-path/${i})`,
+  ).join('\n');
+  const body = `Title: Today\nURL Source: https://example.com\n\nMarkdown Content:\n${navigation}\n\n09:30 report\n\n# Today\nRain, 12-19 degrees\n${'Forecast detail '.repeat(800)}`;
+  const { web } = setup(async () => new Response(body));
+  const doc = await web.content('https://example.com');
+  assert.ok(doc.offset > 3000);
+  assert.match(doc.text, /09:30 report/);
+  assert.match(doc.text, /Rain, 12-19 degrees/);
+  assert.equal(doc.text, body.slice(doc.offset, doc.offset + 6000));
+  assert.equal(doc.length, body.length);
+  const original = await web.stored({
+    content_id: doc.content_id,
+    offset: 0,
+    limit: 20000,
+  });
+  assert.equal(original.text, body);
+  assert.equal(
+    previewOffset(
+      'Title: Article\nMarkdown Content:\n# Article\n' + navigation,
+    ),
+    0,
+  );
+  assert.equal(previewOffset('{"temperature":16}'), 0);
+  for (const beginning of [
+    '```ts\nconst n = 1;\n```',
+    '| city | weather |',
+    '[One](https://example.com)\n# Today',
+  ])
+    assert.equal(
+      previewOffset(
+        'Title: Article\nMarkdown Content:\n' + beginning + '\n' + navigation,
+      ),
+      0,
+    );
+  assert.equal(
+    previewOffset(
+      'Title: Article\nMarkdown Content:\nA meaningful introduction ' +
+        'word '.repeat(30) +
+        '\n' +
+        navigation +
+        '\n# Appendix',
+    ),
+    0,
+  );
 });
 
 test('exhausted blocked readers return a diagnostic failure and failed reads are not cached', async () => {
