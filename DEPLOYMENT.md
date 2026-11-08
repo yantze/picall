@@ -2,20 +2,26 @@
 
 ## 当前部署：自动平衡研究性能优化
 
-发布时间：2026-11-08 09:38:22（Asia/Shanghai）。
+发布时间：2026-11-08 09:59:59（Asia/Shanghai）。
 
-- 源码提交：`86d530f50267d8e1c10aa8c498994482f942ccba`（Cloudflare 分支）。
-- Worker version：`af4fb00d-0c81-4a31-b450-6f99c3601ff7`。
-- Deployment：`bb49627b-20b0-451b-806d-b80ec0e941de`，流量 100%。
+- 源码提交：`2f9bec87164ba10b697117a7ffd6cc638fc7bbe9`（Cloudflare 分支）。
+- Worker version：`4dbf1c06-f799-41ba-9ac0-94d9b2eecd65`。
+- Deployment：`58248935-aaf9-49df-8e45-712576672d47`，流量 100%。
 - 服务地址：https://picall-agent-search.vastiny.workers.dev
 - 简单问题优先一次搜索和少量来源，复杂问题继续补查；默认 3 条结果、600 字符摘要、6,000 字符正文预览、4,000 字符默认分页，完整正文仍可查找/分页。
-- 明确的人机验证/拒绝访问页面进入 reader fallback；同 run 的重复搜索与网页读取使用持久缓存，并发重复请求合并，各等待者独立取消。
+- 明确的人机验证/拒绝访问页面进入 reader fallback，包括真实 Jina CAPTCHA Warning 包装；长链接导航前缀可在预览中跳过（兼容带括号的链接和嵌套图片），并返回原文 offset，完整原文和分页保持可用。查找未命中且没有显式 offset 时不重复发送正文。同 run 的重复搜索与网页读取使用持久缓存，并发重复请求合并，各等待者独立取消。
 - JSON/SSE 从外层每秒轮询改为内部最长 15 秒的 PiHarness.wait；等待不持有会话锁，Lifecycle 继续监督与恢复。增加不含查询、正文和凭证的性能日志。
-- 33 项自动测试（含 6 个 workerd 集成场景）、生成类型同步、TypeScript 和 minified 生产 dry-run 通过。
+- 35 项自动测试（含 7 个 workerd 集成场景）、生成类型同步、TypeScript 和 minified 生产 dry-run 通过，包含导航、查找未命中、取消与真实 15 秒心跳等待边界。
 - 所有线上绑定按名称继承；原有 API_BEARER/搜索 Secrets、DeepSeek 网关、两个 DO namespace、兼容日期与日志设置保留，migration tag 仍为 v1。
-- bundle：1,117,553 bytes；SHA-256：`5c9e0802ff12ff8f87c7f68006c421b6b800a2b3cad7f7f5f843fbc1ad21b659`。
+- bundle：1,119,212 bytes；SHA-256：`64b483fc9016dbd21da635e4eb7cab3ae7911039539c5f1b7483710cde7fe7b6`。
 
-本轮真实云端探针正在采集三次天气和一次复杂研究的结果。探针仅有 scheduled handler，通过已有 namespace 调用线上 DO，没有公网 HTTP 路由或密钥绑定；验证结束后删除。它不替代公网 API 入口和客户端端到端网络耗时测试。
+性能优化首次于 09:38:22 发布版本 af4fb00d（源码 86d530f）；首轮真实对照未稳定提速，故补充导航预览、CAPTCHA 告警识别与足够即答策略后发布当前版本，首轮数据保留在 VALIDATION.md。
+
+第二轮于 09:51:53 发布版本 25e0fceb（源码 b2a8f6e），天气中位耗时已降至 11,147 ms，但仍有导航解析和重复正文造成的慢例，数据同样保留在 VALIDATION.md；当前版本补齐该边界。
+
+最终轮真实云端对照已完成，四项均 succeeded：三次天气 DO 耗时 11,735 / 22,611 / 11,339 ms，中位 11,735 ms；累计输入 10,603 / 26,508 / 14,221 token，中位较原样本降低约 64.4%。复杂研究耗时 36,118 ms，6 次 Jina 阅读，带来源作答。来源过期、冲突及 provider 限额仍可能增加轮数；保留每次样本与前两轮结果，详见 VALIDATION.md。
+
+探针只通过绑定调用线上 DO，没有公网 HTTP 路由或密钥绑定；2026-11-08 10:05:04（Asia/Shanghai）已清空 cron 并删除临时 Worker。上述耗时不包含公网入口及客户端网络，不能与原公网 28,014 ms 直接计算端到端提升比例；开发环境仍不能直连 workers.dev。公开 API 的 JSON/SSE、幂等、取消与恢复由 workerd 集成测试验证，本轮没有冒充完成生产公网入口或强杀 DO 验收。
 
 ## 搜索修复与不限地址读取（历史）
 
