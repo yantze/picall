@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { WebTools, parseWebURL, boundedText } from '../src/tools';
+import { WebTools, parseWebURL, boundedText, contentIssue } from '../src/tools';
 const env = {
   BRAVE_KEY: 'b',
   TAVILY_KEY: 't',
@@ -299,4 +299,231 @@ test('search failures include safe provider/status diagnostics and fallback trai
     assert.doesNotMatch(error.message, /provider response may contain secrets/);
     return true;
   });
+});
+
+test('search previews stay small, preserve explicit count and cache all query parameters per run', async () => {
+  const requests: URL[] = [];
+  const { web, map } = setup(async (url: string) => {
+    const u = new URL(url);
+    requests.push(u);
+    return Response.json({
+      web: {
+        results: Array.from({ length: 10 }, (_, i) => ({
+          url: `https://example.com/${i}`,
+          title: 'Source',
+          description: 'x'.repeat(5000),
+        })),
+      },
+    });
+  });
+  const first = await web.search({ query: 'q' });
+  assert.equal(first.results.length, 3);
+  assert.equal(requests[0].searchParams.get('count'), '3');
+  assert.equal(first.results[0].snippet.length, 600);
+  assert.deepEqual(
+    await web.search({ query: 'q', provider: 'auto', count: 3, page: 1 }),
+    first,
+  );
+  const restored = new WebTools(
+    env,
+    {
+      get: async (k) => map.get(k),
+      put: async (k, v) => {
+        map.set(k, v);
+      },
+    },
+    async () => ({ id: 'run', deadline: Date.now() + 10000 }),
+    async () => {
+      throw Error('cached work must not reach the network');
+    },
+  );
+  assert.deepEqual(await restored.search({ query: 'q' }), first);
+  assert.equal(requests.length, 1);
+  assert.equal(
+    (await web.search({ query: 'q', count: 10 })).results.length,
+    10,
+  );
+  await web.search({ query: 'q', page: 2 });
+  await web.search({ query: 'q', freshness: 'pd' });
+  await web.search({ query: 'q', domains: ['example.com'] });
+  assert.equal(requests.length, 5);
+  const other = new WebTools(
+    env,
+    {
+      get: async (k) => map.get(k),
+      put: async (k, v) => {
+        map.set(k, v);
+      },
+    },
+    async () => ({ id: 'another-run', deadline: Date.now() + 10000 }),
+    async () => {
+      requests.push(new URL('https://example.com'));
+      return Response.json({ web: { results: [] } });
+    },
+  );
+  await other.search({ query: 'q' });
+  assert.equal(requests.length, 6);
+});
+
+test('short body previews retain full persisted text for tail lookup after reopening tools', async () => {
+  let calls = 0;
+  const body = 'a'.repeat(22000) + 'TAIL weather 15 degrees';
+  const { web, map } = setup(async () => {
+    calls++;
+    return new Response(body, { headers: { 'Content-Type': 'text/plain' } });
+  });
+  const first = await web.content('https://example.com/article#one');
+  assert.equal(first.text.length, 6000);
+  assert.equal(first.length, body.length);
+  assert.equal(
+    (await web.stored({ content_id: first.content_id })).text.length,
+    4000,
+  );
+  const reopened = new WebTools(
+    env,
+    {
+      get: async (k) => map.get(k),
+      put: async (k, v) => {
+        map.set(k, v);
+      },
+    },
+    async () => ({ id: 'run', deadline: Date.now() + 10000 }),
+    async () => {
+      throw Error('duplicate fetch');
+    },
+  );
+  assert.equal(
+    (await reopened.content('https://example.com/article#two')).content_id,
+    first.content_id,
+  );
+  const tail = await reopened.stored({
+    content_id: first.content_id,
+    find: 'TAIL',
+  });
+  assert.equal(tail.found, 22000);
+  assert.match(tail.text, /TAIL weather 15 degrees/);
+  assert.equal(
+    (await reopened.stored({ content_id: first.content_id, limit: 20000 })).text
+      .length,
+    20000,
+  );
+  assert.equal(calls, 1);
+});
+
+test('duplicate in-flight reads share a request without one cancelled reader cancelling the other', async () => {
+  let calls = 0;
+  let release!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const { web } = setup(async (_url: string, init: RequestInit) => {
+    calls++;
+    await ready;
+    assert.equal(init.signal?.aborted, false);
+    return new Response('Shared useful body', {
+      headers: { 'Content-Type': 'text/plain' },
+    });
+  });
+  const controller = new AbortController();
+  const one = web.content('https://example.com/shared', controller.signal);
+  const rejected = assert.rejects(one, (e: any) => e.name === 'AbortError');
+  const two = web.content('https://example.com/shared');
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  controller.abort();
+  await rejected;
+  release();
+  assert.equal((await two).text, 'Shared useful body');
+  assert.equal(calls, 1);
+});
+
+test('an abandoned shared read stops its network request and cannot cache a failed attempt', async () => {
+  let started!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  let calls = 0;
+  const { web } = setup(async (_url: string, init: RequestInit) => {
+    calls++;
+    if (calls > 1)
+      return new Response('recovered', {
+        headers: { 'Content-Type': 'text/plain' },
+      });
+    started();
+    await new Promise((_, reject) =>
+      init.signal?.addEventListener(
+        'abort',
+        () => reject(init.signal?.reason),
+        { once: true },
+      ),
+    );
+    throw Error('unreachable');
+  });
+  const controller = new AbortController();
+  const rejected = assert.rejects(
+    web.content('https://example.com/retry', controller.signal),
+  );
+  await ready;
+  controller.abort();
+  await rejected;
+  assert.equal(
+    (await web.content('https://example.com/retry')).text,
+    'recovered',
+  );
+  assert.equal(calls, 2);
+});
+
+test('challenge detection rejects reader errors and challenge pages without rejecting articles about CAPTCHA', async () => {
+  const blocked =
+    'Title: Forbidden\nURL Source: https://example.com\nWarning: Target URL returned error 403: Forbidden\nMarkdown Content:\nPlease verify you are human';
+  assert.equal(contentIssue(blocked), 'upstream_error_page');
+  assert.equal(
+    contentIssue(
+      '<html><title>Just a moment...</title><body>Checking your browser</body></html>',
+    ),
+    'access_challenge',
+  );
+  assert.equal(
+    contentIssue(
+      'Title: Understanding CAPTCHA\nMarkdown Content:\nThis article quotes "Please verify you are human" and explains CAPTCHA.',
+    ),
+    undefined,
+  );
+  assert.equal(
+    contentIssue(
+      'Title: Reader errors explained\nMarkdown Content:\nWarning: Target URL returned error 403: Forbidden\nThis is an example in a technical article.',
+    ),
+    undefined,
+  );
+  let calls = 0;
+  const { web } = setup(async () => {
+    calls++;
+    return calls === 1
+      ? new Response(blocked)
+      : Response.json({ results: [{ text: 'Real weather data' }] });
+  });
+  assert.equal(
+    (await web.content('https://example.com/weather')).provider,
+    'tinyfish_fetch',
+  );
+  assert.equal(calls, 2);
+});
+
+test('exhausted blocked readers return a diagnostic failure and failed reads are not cached', async () => {
+  let calls = 0;
+  const { web } = setup(async (url: string) => {
+    calls++;
+    return String(url).includes('api.fetch.tinyfish')
+      ? Response.json({ results: [{ text: 'Please verify you are human.' }] })
+      : new Response('Please verify you are human.');
+  });
+  for (let i = 0; i < 2; i++)
+    await assert.rejects(web.content('https://example.com'), (e: any) => {
+      assert.equal(e.code, 'content_unavailable');
+      assert.deepEqual(
+        e.details.attempts.map((a: any) => a.reason),
+        Array(3).fill('access_challenge'),
+      );
+      return true;
+    });
+  assert.equal(calls, 6);
 });

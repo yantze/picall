@@ -6,7 +6,7 @@
 
 ## 当前部署
 
-已发布到 [picall-agent-search.vastiny.workers.dev](https://picall-agent-search.vastiny.workers.dev)。AI binding、两个 SQLite Durable Object 和 API_BEARER 已配置。搜索服务密钥已由部署方配置，但有效性与真实搜索尚未验收。发布版本、验证范围与限制见 [DEPLOYMENT.md](DEPLOYMENT.md)。
+已发布到 [picall-agent-search.vastiny.workers.dev](https://picall-agent-search.vastiny.workers.dev)。AI binding、两个 SQLite Durable Object 和 API_BEARER 已配置。调用方已成功完成真实天气搜索；优化后的验证范围与发布版本见 [DEPLOYMENT.md](DEPLOYMENT.md)。
 
 ## 执行架构
 
@@ -16,7 +16,7 @@
 
 当前默认模型 `deepseek-flash`，通过 `AI_GATEWAY_ID=deepseek` 使用网关中 DeepSeek provider 的 `default` BYOK 密钥。该路径走 provider-native 接口，不经过 Workers AI `/run` 的付费模型目录，也不回退到 Cloudflare 统一计费。保留 `@cf/` Workers AI 模型支持，使用 GLM-5.3 Flash 仍需相应付费资格。
 
-最多 8 个工具轮次，总预算 5 分钟。deadline 存于任务中；工具共享剩余预算，监督作业在到期时取消 Pi。完成时再次检查截止，只有 Pi `done` 可返回 succeeded；unanswered、turn_limit、取消、超时均没有 completion。SSE 执行中只有心跳，完成后发送最终正文、finish、可选累计 usage 和 `[DONE]`；失败发送 error 与 `[DONE]`，不伪造成功。
+最多 8 个工具轮次，总预算 5 分钟。deadline 存于任务中；工具共享剩余预算，监督作业在到期时取消 Pi。完成时再次检查截止，只有 Pi `done` 可返回 succeeded；unanswered、turn_limit、取消、超时均没有 completion。JSON/SSE 通过内部最长 15 秒的 PiHarness.wait 等待结果，替代外层每秒查询；等待不持有会话锁，取消、监督及其他等待者仍可推进。后台监督继续通过 Lifecycle 恢复和结算。SSE 执行中只有心跳，完成后发送最终正文、finish、可选累计 usage 和 `[DONE]`；失败发送 error 与 `[DONE]`，不伪造成功。
 
 会话最后一次提交/查询/取消后 7 天清理。幂等键保存 7 天（从首次映射计算）；到期后同键是新请求。键映射先于任务 admission 保存，若 admission 返回 409，原键仍保留，稍后可重试。失败运行的 Pi 转录仍属于会话，客户端如需完全隔离失败上下文应创建新会话。
 
@@ -77,9 +77,15 @@ JSON 等待连接可能被调用方或中间代理超时关闭，使用异步 ru
 
 搜索请求现使用 Workers 全局 fetch 的正确接收者。每次请求失败会返回 provider、错误类别和上游 HTTP 状态（如有），并记录不含密钥、查询或响应正文的结构化诊断。自动搜索失败会附带 fallback 尝试列表，不再把程序错误当成临时服务故障。Agent 提供 Asia/Shanghai 当前日期上下文，且不会因网络故障不断改写查询重试相同服务。
 
-- `web_search({query, provider?, count?, page?, domains?, freshness?})`：count 1–20，page 1–10（外部 provider 仍有自己的分页上限）；freshness 为 Brave 风格 pd/pw/pm/py。默认严格 Brave → Tavily → TinyFish。网络/读取错误、超时、408/425/5xx、402/429/432 切换；缺凭证、401/403、参数或配置错误直接失败。合法空结果不切换。显式 provider 只用该服务，包括 Exa；没有免费 MCP fallback。Tavily/Exa 暂只支持 page=1，其他分页明确返回错误；freshness 分别映射为 time_range 和 startPublishedDate。domains 支持以 - 前缀排除域名，所有结果再按域名过滤。TinyFish page 映射至从零开始的外部分页，单页服务最多约 10 条，返回量可能小于 count。
-- `fetch_content({url})`：Jina → TinyFish → HTTP；远端失败、超时、无正文进入下一项；非 HTTP(S) 协议、超限、不支持的类型、取消和总截止停止。正文最多 2 MiB；HTTP HTML 使用轻量文本提取，非浏览器级可读性解析。工具响应初始正文最多 20,000 字符，完整正文存在 run 的 SQLite 中。
-- `get_search_content({search_id?,result_id?,content_id?,find?,offset?,limit?})`：查询编号来源、按结果号读取正文、正文分页和大小写不敏感查找。find 未命中时 found=-1。ID 只在当前 run 有效，不跨 run 隐式共享。
+- `web_search({query, provider?, count?, page?, domains?, freshness?})`：count 默认 3、范围 1–20；每条摘要最多 600 字符。page 1–10（外部 provider 仍有自己的分页上限）；freshness 为 Brave 风格 pd/pw/pm/py。默认严格 Brave → Tavily → TinyFish。网络/读取错误、超时、408/425/5xx、402/429/432 切换；缺凭证、401/403、参数或配置错误直接失败。合法空结果不切换。显式 provider 只用该服务，包括 Exa；没有免费 MCP fallback。Tavily/Exa 暂只支持 page=1，其他分页明确返回错误；freshness 分别映射为 time_range 和 startPublishedDate。domains 支持以 - 前缀排除域名，所有结果再按域名过滤。TinyFish page 映射至从零开始的外部分页，单页服务最多约 10 条，返回量可能小于 count。
+- `fetch_content({url})`：Jina → TinyFish → HTTP；远端失败、超时、无正文及明确的访问拒绝/人机验证页面进入下一项；非 HTTP(S) 协议、超限、不支持的类型、取消和总截止停止。全部读取失败时返回 content_unavailable 与安全的尝试原因。正文最多 2 MiB；HTTP HTML 使用轻量文本提取，非浏览器级可读性解析。工具响应初始正文最多 6,000 字符，length 表示完整字符数，完整正文存在 run 的 SQLite 中。
+- `get_search_content({search_id?,result_id?,content_id?,find?,offset?,limit?})`：查询编号来源、按结果号读取正文、正文分页和大小写不敏感查找。默认分页 4,000 字符，可显式指定至 20,000。find 未命中时 found=-1。ID 只在当前 run 有效，不跨 run 隐式共享。
+
+研究提示按问题复杂度分配工作：简单实时问题先检索一次、阅读 1–2 个相关来源，资料充分后回答；资料不足、过期或冲突时继续查证。复杂研究仍可扩大 count、补搜和多源交叉验证，没有额外的分类模型请求，也没有硬性缩减工具轮数。正文预览缺少目标内容时使用 find/分页。
+
+同一 run 的相同搜索参数和网页地址复用 SQLite 缓存，工具实例重建后仍有效；网页 URL 只去掉 fragment，不删除查询参数。失败不缓存。并发重复请求共享网络调用，各等待者独立取消，最后一个等待者离开才中止共享请求；进程中断仍可能在缓存提交前重放，不保证第三方 API exactly-once。
+
+结构化日志新增 tool_finished（工具完整耗时、返回字符数、cache_hit，含并发合并）、tool_request_headers（上游响应头耗时，不含读体）及 tool_content_rejected（无效正文原因），均按 run_id 关联，不记录查询、网页正文或凭证。模型耗时与调用次数可结合 AI Gateway 日志查看。公开请求参数和响应格式保持兼容。
 
 抓取都作为 Pi 管理的工具执行，没有无人等待的后台 fetch Promise。工具注册 replay:safe 表示可重放，不表示第三方计费 exactly-once。模型可能并行调用工具；服务调用次数序列化写入，记录的是发出网络请求前的尝试次数，包括失败和可能未真正送达的请求。
 

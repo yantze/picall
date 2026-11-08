@@ -68,13 +68,27 @@ export class SearchSession extends Base {
           delta = {
             tool_calls: [
               call('fetch_content', { url: 'https://example.com/' + suffix }),
-              call('fetch_content', { url: 'https://example.com/second' }, 1),
+              call(
+                'fetch_content',
+                {
+                  url:
+                    'https://example.com/' +
+                    (prompt.includes('cache exercise') ? suffix : 'second'),
+                },
+                1,
+              ),
             ],
           };
         } else if (count === 3) {
           delta = {
             content: 'Intermediate follow-up',
-            tool_calls: [call('web_search', { query: 'refined research' })],
+            tool_calls: [
+              call('web_search', {
+                query: prompt.includes('cache exercise')
+                  ? 'research'
+                  : 'refined research',
+              }),
+            ],
           };
         } else
           delta = {

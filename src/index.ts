@@ -1,6 +1,6 @@
 import { DurableObject } from 'cloudflare:workers';
 import { Lifecycle, type LifecycleJobContext } from 'agents/lifecycle';
-import { PiHarness } from 'agents/harness/pi';
+import { PiHarness, type PiOperationResult } from 'agents/harness/pi';
 import { createModelRuntime, supportsModel } from './models';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { Harness } from '@earendil-works/pi-durable';
@@ -41,6 +41,7 @@ type Run = {
   nextHashes?: string[];
 };
 type SessionHistory = { hashes: string[]; system: string; model: string };
+const isPending = (run: Run) => ['accepted', 'running'].includes(run.status);
 // Each key gets a durable coordinator. Its mapping exists before any session is contacted.
 export class RequestKey extends DurableObject<Env> {
   async fetch(request: Request) {
@@ -184,6 +185,8 @@ export class SearchSession extends DurableObject<Env> {
           return json(await this.ctx.storage.get('run:' + id));
         });
       const id = new URL(request.url).searchParams.get('id') || '';
+      if (path === '/wait')
+        return json(await this.waitForRun(id, request.signal));
       if (path === '/cancel')
         return await this.locked(async () => {
           const run = await this.ctx.storage.get<Run>('run:' + id);
@@ -208,6 +211,62 @@ export class SearchSession extends DurableObject<Env> {
     } catch (e) {
       return errorResponse(e);
     }
+  }
+  private async waitForRun(id: string, signal: AbortSignal) {
+    const first = await this.locked(async () => {
+      const run = await this.ctx.storage.get<Run>('run:' + id);
+      if (!run) fail('run_not_found', 404);
+      if (isPending(run)) await this.prepare(run);
+      await this.touch();
+      return run;
+    });
+    if (!isPending(first)) return first;
+    const timer = new AbortController();
+    const handle = setTimeout(
+      () => timer.abort(),
+      Math.max(1, Math.min(15000, first.deadline - Date.now())),
+    );
+    let result: PiOperationResult | undefined;
+    try {
+      // Waiting must not hold the admission/finalization lock: cancellation and
+      // the durable deadline supervisor must remain able to settle this run.
+      result = await this.harness.wait(id, {
+        signal: AbortSignal.any([signal, timer.signal]),
+      });
+    } catch (e) {
+      signal.throwIfAborted();
+      if (!timer.signal.aborted) throw e;
+    } finally {
+      clearTimeout(handle);
+    }
+    signal.throwIfAborted();
+    return this.locked(async () => {
+      // Another waiter, cancellation or the supervisor may have won the race.
+      const run = await this.ctx.storage.get<Run>('run:' + id);
+      if (!run) fail('run_not_found', 404);
+      if (isPending(run)) {
+        if (Date.now() >= run.deadline) {
+          await this.harness.abort({ operationId: id });
+          run.status = 'failed';
+          run.error = { code: 'deadline_exceeded' };
+          await this.finish(run);
+        } else if (result) await this.settle(run, result);
+      }
+      return run;
+    });
+  }
+  private async settle(run: Run, result: PiOperationResult) {
+    if (Date.now() >= run.deadline) {
+      run.status = 'failed';
+      run.error = { code: 'deadline_exceeded' };
+    } else if (result.status === 'done') {
+      run.status = 'succeeded';
+      run.completion = result.text || '';
+    } else {
+      run.status = 'failed';
+      run.error = { code: result.reason || 'unanswered' };
+    }
+    await this.finish(run);
   }
   private async prepare(run: Run) {
     if (run.status !== 'accepted') return;
@@ -313,17 +372,7 @@ export class SearchSession extends DurableObject<Env> {
       } catch {
         return { rescheduleAt: Math.min(Date.now() + 1000, run.deadline) };
       }
-      if (Date.now() >= run.deadline) {
-        run.status = 'failed';
-        run.error = { code: 'deadline_exceeded' };
-      } else if (result.status === 'done') {
-        run.status = 'succeeded';
-        run.completion = result.text || '';
-      } else {
-        run.status = 'failed';
-        run.error = { code: result.reason || 'unanswered' };
-      }
-      await this.finish(run);
+      await this.settle(run, result);
     });
   }
 }
@@ -403,9 +452,10 @@ export async function route(request: Request, env: Env): Promise<Response> {
       };
       const first = (await accepted.json()) as Run;
       if (asyncRun) return json(publicRun(first), 202, headers);
-      const get = async () => {
+      const get = async (signal: AbortSignal) => {
         const r = await stub.fetch(
-          'https://internal/result?id=' + encodeURIComponent(id),
+          'https://internal/wait?id=' + encodeURIComponent(id),
+          { signal },
         );
         if (!r.ok) throw new Fault('result_unavailable', 502);
         return (await r.json()) as Run;
@@ -413,9 +463,9 @@ export async function route(request: Request, env: Env): Promise<Response> {
       if (input.stream)
         return sse(first, get, headers, input.includeUsage, request.signal);
       let run = first;
-      while (['accepted', 'running'].includes(run.status)) {
-        await pause(request.signal);
-        run = await get();
+      while (isPending(run)) {
+        request.signal.throwIfAborted();
+        run = await get(request.signal);
       }
       return run.status === 'succeeded'
         ? json(run.completion, 200, headers)
@@ -451,29 +501,16 @@ export async function route(request: Request, env: Env): Promise<Response> {
     return errorResponse(e);
   }
 }
-function pause(signal?: AbortSignal) {
-  return new Promise<void>((resolve, reject) => {
-    signal?.throwIfAborted();
-    const done = () => {
-      signal?.removeEventListener('abort', abort);
-      resolve();
-    };
-    const timer = setTimeout(done, 1000);
-    const abort = () => {
-      clearTimeout(timer);
-      reject(signal?.reason);
-    };
-    signal?.addEventListener('abort', abort, { once: true });
-  });
-}
 function sse(
   first: Run,
-  get: () => Promise<Run>,
+  get: (signal: AbortSignal) => Promise<Run>,
   headers: Record<string, string>,
   includeUsage: boolean,
   signal: AbortSignal,
 ) {
   let stopped = false;
+  const disconnected = new AbortController();
+  const waiting = AbortSignal.any([signal, disconnected.signal]);
   return new Response(
     new ReadableStream<Uint8Array>({
       async start(controller) {
@@ -498,8 +535,7 @@ function sse(
               send(': heartbeat\n\n');
               heartbeat = Date.now();
             }
-            await pause(signal);
-            if (!stopped) run = await get();
+            if (!stopped) run = await get(waiting);
           }
           if (stopped) return;
           if (run.status === 'succeeded') {
@@ -542,6 +578,7 @@ function sse(
       },
       cancel() {
         stopped = true;
+        disconnected.abort();
       },
     }),
     {

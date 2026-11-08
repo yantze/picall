@@ -356,6 +356,83 @@ test(
       assert.equal(run.status, 'succeeded', JSON.stringify(run));
       assert.equal(outbound, 4, JSON.stringify(run));
       assert.deepEqual(run.service_calls, { brave: 2, jina: 2 });
+      const cached: any = await (
+        await req(mf, '/v1/runs', { prompt: 'cache exercise' })
+      ).json();
+      const cachedRun = await settled(mf, cached.id);
+      assert.equal(cachedRun.status, 'succeeded', JSON.stringify(cachedRun));
+      assert.equal(
+        outbound,
+        6,
+        'duplicate search and parallel reads must reuse managed results',
+      );
+      assert.deepEqual(cachedRun.service_calls, { brave: 1, jina: 1 });
+    } finally {
+      await mf.dispose();
+      await rm(dir, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  'workerd: concurrent long waits settle once and do not block cancellation',
+  { timeout: 30000 },
+  async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'picall-wait-'));
+    const mf = new Miniflare(options(dir));
+    try {
+      const started: any = await (
+        await req(mf, '/v1/runs', { prompt: 'slow' })
+      ).json();
+      const ns = await mf.getDurableObjectNamespace('SESSIONS');
+      const stub = ns.get(ns.idFromName(started.session_id));
+      const one = stub.fetch('https://internal/wait?id=' + started.id);
+      const two = stub.fetch('https://internal/wait?id=' + started.id);
+      await wait(100);
+      const before = Date.now();
+      const cancelled: any = await (
+        await req(mf, '/v1/runs/' + started.id + '/cancel', {})
+      ).json();
+      assert.equal(cancelled.status, 'cancelled');
+      assert.ok(
+        Date.now() - before < 1500,
+        'long wait must not hold the cancellation lock',
+      );
+      const results = (await Promise.all([
+        one.then((r) => r.json()),
+        two.then((r) => r.json()),
+      ])) as any[];
+      assert.ok(
+        results.every((r) => r.status === 'cancelled' && !r.completion),
+      );
+      const body = { messages: [{ role: 'user', content: 'research' }] };
+      const responses = await Promise.all([
+        req(mf, '/v1/chat/completions', body, {
+          'Idempotency-Key': 'parallel-wait',
+        }),
+        req(mf, '/v1/chat/completions', body, {
+          'Idempotency-Key': 'parallel-wait',
+        }),
+      ]);
+      assert.equal(responses[0].status, 200);
+      const completions: any[] = await Promise.all(
+        responses.map((r) => r.json()),
+      );
+      assert.deepEqual(completions[0], completions[1]);
+      assert.equal(completions[0].usage.total_tokens, 60);
+      const followUp = await req(
+        mf,
+        '/v1/chat/completions',
+        {
+          messages: [
+            ...body.messages,
+            completions[0].choices[0].message,
+            { role: 'user', content: 'next' },
+          ],
+        },
+        { 'X-Session-Id': responses[0].headers.get('x-session-id') },
+      );
+      assert.equal(followUp.status, 200, await followUp.clone().text());
     } finally {
       await mf.dispose();
       await rm(dir, { recursive: true, force: true });
