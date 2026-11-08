@@ -2,6 +2,8 @@ node_modules/
 *.tgz
 .picall/
 .env
+.env.*
+!.env.example
 coverage/
 *.log
 .DS_Store

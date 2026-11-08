@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { getSupportedThinkingLevels } from '@earendil-works/pi-ai/compat';
 import { canonicalOverrides, DEFAULT_ADDITIONAL_SYSTEM_PROMPT } from './config.js';
@@ -15,6 +15,19 @@ const MAX_RECORD_BYTES = 16 * 1024 * 1024;
 const MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 const MAX_TOOLS = 512;
 const MAX_TOOL_NAME_LENGTH = 256;
+
+// Only application-managed settings cross the child-process boundary. A hash
+// participates in probe/session identity, so rotated credentials and endpoint
+// changes cannot silently reuse a worker with stale configuration.
+const LOCAL_FIELDS = ['modelBaseUrl', 'modelApiKey', 'defaultModel', 'modelContextWindow', 'modelMaxTokens',
+  'enableResearch', 'maxToolRounds', 'requestTimeoutSeconds', 'braveApiKey', 'tavilyApiKey',
+  'tinyfishApiKey', 'exaApiKey', 'jinaApiKey', 'braveBaseUrl', 'tavilyBaseUrl', 'httpTools'];
+function localConfig(config) {
+  return Object.fromEntries(LOCAL_FIELDS.filter(key => config[key] !== undefined).map(key => [key, config[key]]));
+}
+function localConfigKey(config) {
+  return createHash('sha256').update(JSON.stringify(localConfig(config))).digest('hex');
+}
 
 function toolNames(values) {
   if (!Array.isArray(values)) return [];
@@ -52,7 +65,7 @@ function bundledCommand() {
 }
 
 class RpcWorker extends EventEmitter {
-  constructor(command, { cwd, model, effort, systemPrompt, additionalSystemPrompt = DEFAULT_ADDITIONAL_SYSTEM_PROMPT, projectTrust, saveSessions = false, enableSkills = false, toolOverrides = {}, selectedExtensions, logger }) {
+  constructor(command, { cwd, model, effort, systemPrompt, additionalSystemPrompt = DEFAULT_ADDITIONAL_SYSTEM_PROMPT, projectTrust, saveSessions = false, enableSkills = false, toolOverrides = {}, selectedExtensions, managedConfig = {}, logger }) {
     super();
     this.pending = new Map();
     this.sequence = 0;
@@ -77,7 +90,8 @@ class RpcWorker extends EventEmitter {
     if (appendSystemPrompt) args.push('--append-system-prompt', appendSystemPrompt);
     this.child = spawn(command.file, args, {
       cwd,
-      env: { ...process.env, PI_SKIP_VERSION_CHECK: '1', PICALL_TOOL_OVERRIDES: JSON.stringify(toolOverrides) },
+      env: { ...process.env, PI_SKIP_VERSION_CHECK: '1', PICALL_TOOL_OVERRIDES: JSON.stringify(toolOverrides),
+        PICALL_LOCAL_CONFIG: JSON.stringify(managedConfig), PICALL_MODEL_API_KEY: managedConfig.modelApiKey || '' },
       stdio: ['pipe', 'pipe', 'pipe'],
       detached: process.platform !== 'win32',
       windowsHide: true,
@@ -142,6 +156,14 @@ class RpcWorker extends EventEmitter {
         if (record.success) pending.resolve(record.data);
         else pending.reject(failure(record.error || `${record.command} failed.`, 502, 'pi_command_error'));
       } else if (record.type === 'extension_ui_request') {
+        if (record.method === 'setStatus' && record.statusKey === 'picall_failure') {
+          // Only fixed codes enter the API; extension/provider payloads stay out.
+          try {
+            const code = JSON.parse(record.statusText)?.code;
+            if (['turn_limit', 'deadline_exceeded'].includes(code)) this.emit('record', { type: 'picall_failure', code });
+          } catch { /* Ignore malformed optional status records. */ }
+          continue;
+        }
         if (record.method === 'setStatus' && record.statusKey === 'picall_runtime') {
           try {
             if (typeof record.statusText !== 'string' || record.statusText.length > 2 * 1024 * 1024) throw new Error('Invalid runtime status.');
@@ -238,7 +260,8 @@ export class PiRuntime {
   probeKey() {
     const config = this.getConfig();
     return JSON.stringify({ ...runtimeContext(config.workdir || process.cwd(), this.command), projectTrust: config.projectTrust || 'default', enableSkills: config.enableSkills === true,
-      toolOverrides: canonicalOverrides(config.toolOverrides || {}), enableExtensions: config.enableExtensions !== false, extensionOverrides: canonicalOverrides(config.extensionOverrides || {}) });
+      toolOverrides: canonicalOverrides(config.toolOverrides || {}), enableExtensions: config.enableExtensions !== false, extensionOverrides: canonicalOverrides(config.extensionOverrides || {}),
+      managedConfig: localConfigKey(config) });
   }
 
   enqueueProbe(task) {
@@ -288,7 +311,7 @@ export class PiRuntime {
     if (this.closed) throw failure('Pi runtime is shutting down.', 503, 'runtime_closed');
     const worker = new RpcWorker(this.getCommand(), { cwd: config.workdir || process.cwd(), projectTrust: config.projectTrust || 'default',
       enableSkills: config.enableSkills === true, toolOverrides: config.toolOverrides || {}, additionalSystemPrompt: config.additionalSystemPrompt ?? DEFAULT_ADDITIONAL_SYSTEM_PROMPT,
-      logger: this.logger, ...options, selectedExtensions });
+      logger: this.logger, ...options, selectedExtensions, managedConfig: localConfig(settings) });
     this.workers.add(worker);
     worker.once('failure', () => this.workers.delete(worker));
     return worker;
@@ -362,6 +385,7 @@ export class PiRuntime {
       toolOverrides: canonicalOverrides(config.toolOverrides || {}),
       enableExtensions: config.enableExtensions !== false,
       extensionOverrides: canonicalOverrides(config.extensionOverrides || {}),
+      managedConfig: localConfigKey(config),
     };
     if (this.retiredIds.has(id)) throw failure('This session has expired or was closed. Use a new session ID to start a conversation.', 409, 'session_expired');
     if (existing) {
@@ -371,7 +395,7 @@ export class PiRuntime {
         throw failure('This Pi session has exited; start a new session.', 409, 'session_expired');
       }
       if (JSON.stringify(existing.settings) !== JSON.stringify(settings)) {
-        throw failure('Model, effort, system prompt, working directory, project trust, session saving, Skills, tools, or extensions changed. Start a new session.', 409, 'session_configuration_changed');
+        throw failure('Model, provider credentials, search settings, effort, system prompt, working directory, project trust, session saving, Skills, tools, or extensions changed. Start a new session.', 409, 'session_configuration_changed');
       }
       existing.busy = true;
       existing.lastUsedAt = Date.now();
@@ -426,11 +450,9 @@ export class PiRuntime {
 
   async run(session, prompt, { signal, onText, onReasoning, onToolEvent } = {}) {
     const worker = session.worker;
-    let text = '';
     let lastAssistant;
-    let assistantDelta = '';
-    let pendingBreak = false;
     let outputBytes = 0;
+    let settledAborted = false;
     const usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
     let timer;
     let abort;
@@ -447,30 +469,14 @@ export class PiRuntime {
         outputBytes += Buffer.byteLength(delta);
         if (outputBytes > MAX_OUTPUT_BYTES) throw failure('Pi output exceeded the 8 MiB request limit.', 502, 'output_limit');
       };
-      const emitText = (delta) => {
-        countOutput(delta);
-        if (pendingBreak) { pendingBreak = false; text += '\n\n'; onText?.('\n\n'); }
-        text += delta;
-        assistantDelta += delta;
-        onText?.(delta);
-      };
       onRecord = (record) => {
         try {
-          if (record.type === 'message_start' && record.message?.role === 'assistant') {
-            assistantDelta = '';
-            pendingBreak = text.length > 0;
-          }
           if (record.type === 'message_update') {
             const update = record.assistantMessageEvent;
-            if (update?.type === 'text_delta' && update.delta) emitText(update.delta);
-            if (update?.type === 'thinking_delta' && update.delta) { countOutput(update.delta); onReasoning?.(update.delta); }
+            if (['text_delta', 'thinking_delta'].includes(update?.type) && update.delta) countOutput(update.delta);
           }
           if (record.type === 'message_end' && record.message?.role === 'assistant') {
             lastAssistant = record.message;
-            if (!assistantDelta && !['error', 'aborted'].includes(lastAssistant.stopReason)) {
-              const fallbackText = (lastAssistant.content || []).filter((part) => part.type === 'text').map((part) => part.text).join('');
-              if (fallbackText) emitText(fallbackText);
-            }
             const current = lastAssistant.usage;
             if (current) {
               usage.prompt_tokens += (current.input || 0) + (current.cacheRead || 0) + (current.cacheWrite || 0);
@@ -478,6 +484,9 @@ export class PiRuntime {
               usage.total_tokens = usage.prompt_tokens + usage.completion_tokens;
             }
           }
+          if (record.type === 'picall_failure') throw failure(record.code === 'turn_limit' ?
+            'The request reached its configured tool-round limit.' : 'The request exceeded its deadline.',
+          record.code === 'turn_limit' ? 422 : 504, record.code);
           if (record.type === 'tool_execution_start' || record.type === 'tool_execution_end') {
             const tool = toolNames([record.toolName])[0];
             if (tool) {
@@ -485,7 +494,7 @@ export class PiRuntime {
               onToolEvent?.({ tool, status: record.type === 'tool_execution_start' ? 'running' : record.isError ? 'failed' : 'completed' });
             }
           }
-          if (record.type === 'agent_settled') resolveRun();
+          if (record.type === 'agent_settled') { settledAborted = record.aborted === true; resolveRun(); }
         } catch (error) { rejectRun(error); void worker.close(); }
       };
       onFailure = (error) => rejectRun(error);
@@ -508,9 +517,18 @@ export class PiRuntime {
         const state = await worker.send({ type: 'get_state' });
         if (state?.isStreaming || state?.isCompacting) await completed;
       }
-      if (lastAssistant?.stopReason === 'error') throw failure(lastAssistant.errorMessage || 'The model request failed.', 502, 'provider_error');
-      if (lastAssistant?.stopReason === 'aborted') throw failure('Pi aborted the request.', 499, 'request_cancelled');
-      return { text, usage, finishReason: lastAssistant?.stopReason === 'length' ? 'length' : 'stop' };
+      if (lastAssistant?.stopReason === 'error') throw failure('The model provider rejected or failed the request.', 502, 'provider_error');
+      if (settledAborted || lastAssistant?.stopReason === 'aborted') throw failure('Pi aborted the request.', 499, 'request_cancelled');
+      if (!lastAssistant || lastAssistant.stopReason !== 'stop' ||
+          lastAssistant.content?.some(part => part.type === 'toolCall')) {
+        throw failure(lastAssistant?.stopReason === 'length' ? 'The model exhausted its output limit before completing an answer.' :
+          'Pi settled without a completed answer.', 502, lastAssistant?.stopReason === 'length' ? 'output_limit' : 'unanswered');
+      }
+      const text = (lastAssistant.content || []).filter(part => part.type === 'text').map(part => part.text).join('');
+      if (!text.trim()) throw failure('Pi settled without a completed text answer.', 502, 'unanswered');
+      if (Buffer.byteLength(text) > MAX_OUTPUT_BYTES) throw failure('Pi output exceeded the 8 MiB request limit.', 502, 'output_limit');
+      onText?.(text);
+      return { text, usage, finishReason: 'stop' };
     } catch (error) {
       this.retire(session);
       await worker.close();

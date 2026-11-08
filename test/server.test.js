@@ -11,7 +11,7 @@ import { Logger } from '../src/logger.js';
 import { PiRuntime } from '../src/pi-rpc.js';
 
 const fakePi = fileURLToPath(new URL('./fixtures/fake-pi.mjs', import.meta.url));
-const defaultAdditionalSystemPrompt = '每一次 turn 中，和工具的交互层数最大是 2 次。';
+const defaultAdditionalSystemPrompt = '按问题复杂度使用工具：简单事实优先一次搜索和一个权威来源，证据充分后立即回答；复杂研究按需补查。';
 const completion = (content = 'Say hello', extra = {}) => ({
   model: 'fake/fake-model', messages: [{ role: 'user', content }], ...extra,
 });
@@ -20,7 +20,7 @@ async function setup(t, settings = {}) {
   const dataDir = await mkdtemp(join(tmpdir(), 'picall-test-'));
   const configStore = new ConfigStore({ dataDir, overrides: { workdir: dataDir } });
   await configStore.load();
-  await configStore.update(settings);
+  await configStore.update({ defaultModel: 'fake/fake-model', ...settings });
   const logger = new Logger({ dataDir });
   const runtime = new PiRuntime({ getConfig: () => configStore.value, logger,
     command: { file: process.execPath, args: [fakePi] } });
@@ -92,7 +92,7 @@ test('non-streaming completion waits for agent_settled and reports OpenAI usage'
   assert.deepEqual(result.usage, { prompt_tokens: 12, completion_tokens: 8, total_tokens: 20 });
 });
 
-test('SSE returns content deltas, a final reason, usage when requested and [DONE]', async (t) => {
+test('SSE returns only the completed answer, a final reason, usage when requested and [DONE]', async (t) => {
   const { request } = await setup(t);
   const response = await request('/v1/chat/completions', { method: 'POST',
     body: completion('Stream hello', { stream: true, stream_options: { include_usage: true } }) });
@@ -103,6 +103,7 @@ test('SSE returns content deltas, a final reason, usage when requested and [DONE
   assert.equal(data.at(-1), '[DONE]');
   const chunks = data.filter((line) => line !== '[DONE]').map((line) => JSON.parse(line));
   assert.ok(chunks.every((chunk) => chunk.object === 'chat.completion.chunk'));
+  assert.equal(chunks.filter(chunk => chunk.choices?.[0]?.delta?.content).length, 1);
   assert.equal(chunks.flatMap((chunk) => chunk.choices || []).map((choice) => choice.delta?.content || '').join(''), 'Hello from Pi (turn 1)');
   assert.ok(chunks.some((chunk) => chunk.choices?.[0]?.finish_reason === 'stop'));
   assert.ok(chunks.some((chunk) => chunk.usage?.total_tokens === 20));
@@ -164,6 +165,33 @@ test('API key protects OpenAI routes while the local management page stays acces
   assert.equal(config.apiKey, undefined);
   assert.ok(!JSON.stringify(config).includes(key));
   assert.equal((await request('/api/status')).status, 200);
+});
+
+test('the management HTTP API never returns saved model or search keys and omission preserves existing secrets', async t => {
+  const { request, configStore } = await setup(t);
+  const keys = { apiKey: 'pc-api-management-canary', modelApiKey: 'model-management-canary',
+    braveApiKey: 'brave-management-canary', tavilyApiKey: 'tavily-management-canary',
+    tinyfishApiKey: 'tinyfish-management-canary', exaApiKey: 'exa-management-canary', jinaApiKey: 'jina-management-canary' };
+  const saved = await request('/api/config', { method: 'PUT', body: keys });
+  assert.equal(saved.status, 200);
+  for (const config of [await saved.json(), await (await request('/api/config')).json()]) {
+    for (const [field, value] of Object.entries(keys)) {
+      assert.equal(Object.hasOwn(config, field), false);
+      assert.equal(config[`${field}Configured`], true);
+      assert.ok(!JSON.stringify(config).includes(value));
+    }
+  }
+  const unrelated = await request('/api/config', { method: 'PUT', body: { maxToolRounds: 6 } });
+  assert.equal(unrelated.status, 200);
+  for (const [field, value] of Object.entries(keys)) assert.equal(configStore.value[field], value);
+  const cleared = await request('/api/config', { method: 'PUT', body: { modelApiKey: '', braveApiKey: '' } });
+  assert.equal(cleared.status, 200);
+  const result = await cleared.json();
+  assert.equal(result.modelApiKeyConfigured, false);
+  assert.equal(result.braveApiKeyConfigured, false);
+  assert.equal(result.tavilyApiKeyConfigured, true);
+  const logs = JSON.stringify(await (await request('/api/logs')).json());
+  for (const value of Object.values(keys)) assert.ok(!logs.includes(value));
 });
 
 test('cross-origin browser requests cannot mutate local management settings', async (t) => {
@@ -352,8 +380,13 @@ test('provider failures stay errors in both JSON and SSE responses', async (t) =
   const response = await request('/v1/chat/completions', { method: 'POST', body: completion('FAIL_PROVIDER:') });
   assert.equal(response.status, 502);
   assert.deepEqual((await response.json()).error, {
-    message: 'Fake provider failed', type: 'api_error', param: null, code: 'provider_error',
+    message: 'The model provider rejected or failed the request.', type: 'api_error', param: null, code: 'provider_error',
   });
+  const failedRun = await (await request(`/v1/runs/${response.headers.get('x-run-id')}`)).json();
+  assert.equal(failedRun.status, 'failed');
+  assert.equal(failedRun.error.code, 'provider_error');
+  assert.equal(Object.hasOwn(failedRun, 'completion'), false);
+  assert.ok(!JSON.stringify(failedRun).includes('Fake provider failed'));
   const stream = await request('/v1/chat/completions', { method: 'POST', body: completion('FAIL_PROVIDER:', { stream: true }) });
   assert.equal(stream.status, 200); // Headers are committed before the provider runs.
   assert.match(stream.headers.get('content-type'), /^text\/event-stream\b/);
@@ -364,19 +397,205 @@ test('provider failures stay errors in both JSON and SSE responses', async (t) =
   const errors = chunks.filter((chunk) => chunk.error);
   assert.equal(errors.length, 1);
   assert.deepEqual(errors[0].error, {
-    message: 'Fake provider failed', type: 'api_error', param: null, code: 'provider_error',
+    message: 'The model provider rejected or failed the request.', type: 'api_error', param: null, code: 'provider_error',
   });
   assert.ok(!chunks.some((chunk) => chunk.choices?.some((choice) => choice.finish_reason === 'stop')));
 });
 
-test('disconnecting a streaming client cancels the Pi turn and frees its session', async (t) => {
+test('disconnecting an SSE waiter leaves the task running and its final answer can be queried', async (t) => {
   const { request, runtime } = await setup(t);
   const response = await request('/v1/chat/completions', { method: 'POST', body: completion('SLOW: disconnect', { stream: true }) });
   assert.equal(response.status, 200);
+  const runId = response.headers.get('x-run-id');
+  const sessionId = response.headers.get('x-session-id');
+  assert.ok(runId);
+  assert.ok(sessionId);
   const reader = response.body.getReader();
-  await reader.read();
+  const firstFrame = new TextDecoder().decode((await reader.read()).value);
+  assert.ok(!firstFrame.includes('Hello from Pi'), 'SSE must not expose unfinished assistant text');
   await reader.cancel();
-  await waitUntil(() => runtime.list().length === 0);
+  let finished;
+  await waitUntil(async () => {
+    finished = await (await request(`/v1/runs/${runId}`)).json();
+    return finished.status === 'completed';
+  });
+  assert.equal(finished.completion.choices[0].message.content, 'Hello from Pi (turn 1)');
+  assert.equal(finished.completion.id, runId);
+  assert.equal(runtime.list().find(session => session.id === sessionId).busy, false);
+  const continuation = await request('/v1/chat/completions', { method: 'POST',
+    headers: { 'x-session-id': sessionId }, body: completion('Continue after disconnect') });
+  assert.equal(continuation.status, 200);
+  assert.equal((await continuation.json()).choices[0].message.content, 'Hello from Pi (turn 2)');
+});
+
+test('asynchronous submissions return persisted IDs and use the configured default model', async (t) => {
+  const { request, configStore } = await setup(t);
+  const accepted = await request('/v1/runs', { method: 'POST', body: { prompt: 'SLOW: async task' } });
+  assert.equal(accepted.status, 202);
+  const initial = await accepted.json();
+  assert.equal(initial.id, accepted.headers.get('x-run-id'));
+  assert.equal(initial.sessionId, accepted.headers.get('x-session-id'));
+  assert.equal(initial.model, 'fake/fake-model');
+  assert.equal(accepted.headers.get('location'), `/v1/runs/${initial.id}`);
+  assert.ok(['pending', 'running'].includes(initial.status));
+  const saved = JSON.parse(await readFile(join(configStore.dataDir, 'runs', `${initial.id}.json`), 'utf8'));
+  assert.equal(saved.id, initial.id, '202 acceptance must follow the record being written to disk');
+  assert.equal(Object.hasOwn(initial, 'inputFingerprint'), false);
+  let finished;
+  await waitUntil(async () => {
+    const response = await request(`/v1/runs/${initial.id}`);
+    assert.equal(response.status, 200);
+    finished = await response.json();
+    return finished.status === 'completed';
+  });
+  assert.equal(finished.completion.model, 'fake/fake-model');
+  assert.equal(finished.completion.choices[0].message.content, 'Hello from Pi (turn 1)');
+  assert.deepEqual(finished.completion.usage, { prompt_tokens: 12, completion_tokens: 8, total_tokens: 20 });
+  for (const prompt of ['', '  ', null, 5]) {
+    assert.equal((await request('/v1/runs', { method: 'POST', body: { prompt } })).status, 400);
+  }
+  const missing = await request('/v1/runs/missing-task');
+  assert.equal(missing.status, 404);
+  assert.equal((await missing.json()).error.code, 'run_not_found');
+});
+
+test('Idempotency-Key reuses one task without needing the first response session ID and rejects changed input', async (t) => {
+  const { request, runtime, configStore } = await setup(t);
+  const options = { method: 'POST', body: { prompt: 'SLOW: original async prompt' }, headers: { 'idempotency-key': 'local-request-once' } };
+  const [firstResponse, retryResponse] = await Promise.all([request('/v1/runs', options), request('/v1/runs', options)]);
+  assert.equal(firstResponse.status, 202);
+  assert.equal(retryResponse.status, 202);
+  const [first, retry] = await Promise.all([firstResponse.json(), retryResponse.json()]);
+  assert.equal(first.id, retry.id);
+  assert.equal(first.sessionId, retry.sessionId);
+  const stored = JSON.parse(await readFile(join(configStore.dataDir, 'runs', `${first.id}.json`), 'utf8'));
+  assert.equal(Object.hasOwn(stored, 'idempotencyKey'), false);
+  assert.ok(!JSON.stringify(stored).includes('local-request-once'), 'the raw idempotency token must not be persisted');
+  const conflict = await request('/v1/runs', { ...options, body: { prompt: 'Different request' } });
+  assert.equal(conflict.status, 409);
+  assert.equal((await conflict.json()).error.code, 'idempotency_conflict');
+  const wrongSession = await request('/v1/runs', { ...options,
+    headers: { ...options.headers, 'x-session-id': 'another-session' } });
+  assert.equal(wrongSession.status, 409);
+  await waitUntil(async () => (await (await request(`/v1/runs/${first.id}`)).json()).status === 'completed');
+  assert.equal(runtime.list().length, 1, 'duplicate admission must not create another Pi session');
+  const completedRetry = await (await request('/v1/runs', options)).json();
+  assert.equal(completedRetry.id, first.id);
+  assert.equal(completedRetry.completion.choices[0].message.content, 'Hello from Pi (turn 1)');
+  const independent = await (await request('/v1/runs', { method: 'POST', body: options.body })).json();
+  assert.notEqual(independent.id, first.id, 'requests without an idempotency key create a new task');
+});
+
+for (const route of ['/v1/runs', '/v1/chat/completions']) {
+  test(`idempotent ${route} retries retain the original model after defaults or available credentials change`, async t => {
+    const { request, runtime } = await setup(t);
+    const body = route === '/v1/runs' ? { prompt: 'Stable request with no model' }
+      : { messages: [{ role: 'user', content: 'Stable request with no model' }] };
+    const headers = { 'idempotency-key': 'stable-model-default' };
+    const firstResponse = await request(route, { method: 'POST', body, headers });
+    assert.equal(firstResponse.status, route === '/v1/runs' ? 202 : 200);
+    const first = await firstResponse.json();
+    const runId = first.id;
+    let finished;
+    await waitUntil(async () => {
+      finished = await (await request(`/v1/runs/${runId}`)).json();
+      return finished.status === 'completed';
+    });
+    assert.equal(finished.completion.model, 'fake/fake-model');
+    assert.equal(finished.model, 'fake/fake-model');
+    assert.equal(finished.completion.choices[0].message.content, 'Hello from Pi (turn 1)');
+    assert.equal((await request('/api/config', { method: 'PUT',
+      body: { defaultModel: 'fake/plain-model', modelApiKey: '' } })).status, 200);
+    let discoveries = 0;
+    runtime.models = async () => { discoveries++; return []; };
+    const retriedResponse = await request(route, { method: 'POST', body, headers });
+    assert.equal(retriedResponse.status, route === '/v1/runs' ? 202 : 200);
+    const retry = await retriedResponse.json();
+    assert.equal(retry.id, runId, 'retry must look up the raw request before resolving the current default model');
+    const completion = route === '/v1/runs' ? retry.completion : retry;
+    assert.deepEqual(completion, finished.completion);
+    if (route === '/v1/runs') assert.equal(retry.model, 'fake/fake-model');
+    assert.equal(discoveries, 0, 'an accepted request remains retrievable even when provider credentials disappear');
+    assert.equal(runtime.list().length, 1, 'the retried request must not create another Pi worker or turn');
+    if (route === '/v1/chat/completions') {
+      const stream = await request(route, { method: 'POST', headers,
+        body: { ...body, stream: true, stream_options: { include_usage: true } } });
+      assert.equal(stream.status, 200);
+      assert.equal(stream.headers.get('x-run-id'), runId);
+      const chunks = (await stream.text()).split('\n').filter(line => line.startsWith('data: ') && line !== 'data: [DONE]')
+        .map(line => JSON.parse(line.slice(6)));
+      assert.ok(chunks.every(chunk => chunk.model === 'fake/fake-model'), 'replayed SSE metadata must retain the original model');
+      assert.equal(chunks.flatMap(chunk => chunk.choices || []).map(choice => choice.delta?.content || '').join(''),
+        finished.completion.choices[0].message.content);
+      assert.equal(discoveries, 0, 'the transport preference must not change an existing task identity');
+    }
+    const changedBody = route === '/v1/runs' ? { prompt: 'Changed request' }
+      : { messages: [{ role: 'user', content: 'Changed request' }] };
+    const conflict = await request(route, { method: 'POST', body: changedBody, headers });
+    assert.equal(conflict.status, 409);
+    assert.equal((await conflict.json()).error.code, 'idempotency_conflict');
+    assert.equal(discoveries, 0, 'conflicts must also be resolved before consulting current providers');
+    const newRequest = await request(route, { method: 'POST', body,
+      headers: { 'idempotency-key': 'fresh-key-without-provider' } });
+    assert.equal(newRequest.status, 404, 'a genuinely new request must still validate the current model');
+    assert.equal(discoveries, 1);
+  });
+}
+
+test('a disconnected JSON caller can retry before learning its session ID without repeating the turn', async (t) => {
+  const { request, runtime } = await setup(t);
+  const controller = new AbortController();
+  const body = completion('SLOW: disconnected before response');
+  const headers = { 'idempotency-key': 'lost-json-response' };
+  const first = request('/v1/chat/completions', { method: 'POST', body, headers, signal: controller.signal });
+  const firstAborted = assert.rejects(first, error => error.name === 'AbortError');
+  await waitUntil(() => runtime.list().some(session => session.busy));
+  controller.abort();
+  await firstAborted;
+  const response = await request('/v1/chat/completions', { method: 'POST', body, headers });
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.equal(result.id, response.headers.get('x-run-id'));
+  assert.equal(result.choices[0].message.content, 'Hello from Pi (turn 1)');
+  assert.equal(runtime.list().length, 1);
+  const stored = await (await request(`/v1/runs/${result.id}`)).json();
+  assert.equal(stored.status, 'completed');
+  assert.deepEqual(stored.completion, result);
+});
+
+test('the explicit cancel endpoint stops the task and a late model result cannot turn it into success', async (t) => {
+  const { request, runtime } = await setup(t);
+  const accepted = await request('/v1/runs', { method: 'POST', body: { prompt: 'SLOW: cancel this turn' } });
+  assert.equal(accepted.status, 202);
+  const run = await accepted.json();
+  await waitUntil(() => runtime.list().some(session => session.busy));
+  const cancelledResponse = await request(`/v1/runs/${run.id}/cancel`, { method: 'POST' });
+  assert.equal(cancelledResponse.status, 200);
+  const cancelled = await cancelledResponse.json();
+  assert.equal(cancelled.status, 'cancelled');
+  assert.equal(cancelled.error.code, 'request_cancelled');
+  assert.equal(Object.hasOwn(cancelled, 'completion'), false);
+  await waitUntil(() => !runtime.list().some(session => session.busy));
+  await new Promise(resolve => setTimeout(resolve, 350));
+  const after = await (await request(`/v1/runs/${run.id}`)).json();
+  assert.equal(after.status, 'cancelled');
+  assert.equal(Object.hasOwn(after, 'completion'), false);
+  const again = await (await request(`/v1/runs/${run.id}/cancel`, { method: 'POST' })).json();
+  assert.equal(again.status, 'cancelled');
+});
+
+test('run submission, lookup and cancellation enforce the API bearer and reject mismatched browsers', async (t) => {
+  const apiKey = 'pc-run-auth-private';
+  const { request } = await setup(t, { apiKey });
+  const headers = { authorization: `Bearer ${apiKey}` };
+  assert.equal((await request('/v1/runs', { method: 'POST', body: { prompt: 'Hello' } })).status, 401);
+  const run = await (await request('/v1/runs', { method: 'POST', headers, body: { prompt: 'SLOW: authenticated' } })).json();
+  assert.equal((await request(`/v1/runs/${run.id}`)).status, 401);
+  assert.equal((await request(`/v1/runs/${run.id}/cancel`, { method: 'POST' })).status, 401);
+  const cors = await request(`/v1/runs/${run.id}`, { headers: { ...headers, origin: 'https://client.example' } });
+  assert.equal(cors.status, 200);
+  assert.match(cors.headers.get('access-control-expose-headers'), /X-Run-Id/i);
+  assert.equal((await request(`/v1/runs/${run.id}/cancel`, { method: 'POST', headers })).status, 200);
 });
 
 test('an explicitly cleared system prompt cannot silently reuse earlier system instructions', async (t) => {
@@ -480,17 +699,73 @@ test('omitted effort uses Pi defaults and continued sessions retain initial effo
   assert.equal(conflict.status, 409);
 });
 
-test('request selection rejects missing models and unsupported effort levels', async (t) => {
+test('request selection uses the configured default model and rejects invalid models and effort levels', async (t) => {
   const { request, runtime } = await setup(t);
+  const omitted = await request('/v1/chat/completions', { method: 'POST',
+    body: { messages: [{ role: 'user', content: 'REQUEST_METADATA:' }] } });
+  assert.equal(omitted.status, 200);
+  const result = await omitted.json();
+  assert.equal(result.model, 'fake/fake-model');
+  assert.equal(JSON.parse(result.choices[0].message.content).model, 'fake/fake-model');
+  const sessionsBefore = runtime.list().length;
   for (const body of [
-    { messages: [{ role: 'user', content: 'hello' }] },
+    completion('hello', { model: '' }),
+    completion('hello', { model: false }),
     completion('hello', { model: 'fake/plain-model', reasoning_effort: 'high' }),
     completion('hello', { model: 'fake/limited-model', reasoning_effort: 'medium' }),
     completion('hello', { reasoning_effort: 'xhigh' }),
     completion('hello', { context_window: 64000 }),
   ]) assert.equal((await request('/v1/chat/completions', { method: 'POST', body })).status, 400);
   assert.equal((await request('/v1/chat/completions', { method: 'POST', body: completion('hello', { model: 'pi' }) })).status, 404);
-  assert.equal(runtime.list().length, 0);
+  assert.equal(runtime.list().length, sessionsBefore);
+});
+
+test('an omitted model prefers the managed gateway default while an explicit native model ID retains its provider', async t => {
+  const { request, runtime } = await setup(t, { modelApiKey: 'managed-test-key', defaultModel: 'fake/fake-model' });
+  const nativeId = 'fake/fake-model';
+  const managedId = 'picall/fake/fake-model';
+  runtime.models = async () => [nativeId, managedId].map(id => ({ id, reasoningEfforts: ['off'] }));
+  const selections = [];
+  runtime.acquire = async ({ sessionId, model }) => {
+    selections.push(model);
+    return { id: sessionId, model, run: async () => ({ text: model, finishReason: 'stop',
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }) };
+  };
+  const omitted = await request('/v1/chat/completions', { method: 'POST',
+    body: { messages: [{ role: 'user', content: 'Use configured gateway' }] } });
+  assert.equal(omitted.status, 200);
+  const defaultResult = await omitted.json();
+  assert.equal(defaultResult.model, managedId);
+  assert.equal(defaultResult.choices[0].message.content, managedId);
+  const explicit = await request('/v1/chat/completions', { method: 'POST',
+    body: completion('Use explicit native provider', { model: nativeId }) });
+  assert.equal(explicit.status, 200);
+  const nativeResult = await explicit.json();
+  assert.equal(nativeResult.model, nativeId);
+  assert.equal(nativeResult.choices[0].message.content, nativeId);
+  assert.deepEqual(selections, [managedId, nativeId]);
+});
+
+test('reasoning_effort null is equivalent to omission and preserves an existing session effort', async t => {
+  const { request } = await setup(t);
+  const omitted = await request('/v1/chat/completions', { method: 'POST',
+    body: completion('REQUEST_METADATA: default null effort', { reasoning_effort: null }) });
+  assert.equal(omitted.status, 200);
+  const defaultResult = await omitted.json();
+  const metadata = JSON.parse(defaultResult.choices[0].message.content);
+  assert.equal(metadata.effort, 'medium');
+  assert.equal(metadata.explicitEffort, false);
+  const first = await request('/v1/chat/completions', { method: 'POST',
+    body: completion('REQUEST_METADATA: explicit high effort', { reasoning_effort: 'high' }) });
+  assert.equal(first.status, 200);
+  await first.json();
+  const continuation = await request('/v1/chat/completions', { method: 'POST',
+    headers: { 'x-session-id': first.headers.get('x-session-id') },
+    body: completion('REQUEST_METADATA: retain effort with null', { reasoning_effort: null }) });
+  assert.equal(continuation.status, 200);
+  const continuedMetadata = JSON.parse((await continuation.json()).choices[0].message.content);
+  assert.equal(continuedMetadata.effort, 'high');
+  assert.equal(continuedMetadata.explicitEffort, true);
 });
 
 test('legacy defaults migrate out without changing keys or overriding client requests', async (t) => {

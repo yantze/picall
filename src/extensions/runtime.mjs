@@ -1,4 +1,5 @@
 import { MAX_TOOLS, parseToolOverrides, toolPolicy, validToolName } from '../tool-policy.js';
+import { installLocalResearch } from './research.mjs';
 
 const MAX_DESCRIPTION_LENGTH = 500;
 
@@ -12,6 +13,7 @@ function toolNames(values) {
 export default function picallRuntimeExtension(pi) {
   // Invalid policy must prevent metadata from marking this worker ready.
   const overrides = parseToolOverrides(process.env.PICALL_TOOL_OVERRIDES);
+  installLocalResearch(pi);
 
   const report = (ctx) => {
     const allTools = pi.getAllTools();

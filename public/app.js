@@ -1,7 +1,10 @@
 'use strict';
 
 const $ = (id) => document.getElementById(id);
-const DEFAULT_ADDITIONAL_SYSTEM_PROMPT = '每一次 turn 中，和工具的交互层数最大是 2 次。';
+const DEFAULT_ADDITIONAL_SYSTEM_PROMPT = '按问题复杂度使用工具：简单事实优先一次搜索和一个权威来源，证据充分后立即回答；复杂研究按需补查。';
+const SECRET_FIELDS = { modelApiKey: 'model-api-key', braveApiKey: 'brave-api-key', tavilyApiKey: 'tavily-api-key', tinyfishApiKey: 'tinyfish-api-key', exaApiKey: 'exa-api-key', jinaApiKey: 'jina-api-key' };
+const clearedSecrets = new Set();
+let activeRequest = null;
 const state = { config: null, status: null, models: [], logs: [], seenLogs: new Set(), paused: false, sessionId: null, controller: null, eventSource: null, toastTimer: null, logFloor: 0, latestLogTime: '', logConnected: false, toolRun: null,
   capabilityTools: null, capabilityExtensions: null, capabilityError: '', capabilityRequest: 0,
   toolOverrides: Object.create(null), extensionOverrides: Object.create(null), currentView: 'overview', settingsSection: 'general' };
@@ -56,7 +59,7 @@ function writeRoute() {
 }
 
 function showSettingsTab(section, updateUrl = true, focus = false) {
-  state.settingsSection = ['general', 'tools', 'extensions'].includes(section) ? section : 'general';
+  state.settingsSection = ['general', 'model', 'research', 'tools', 'extensions'].includes(section) ? section : 'general';
   document.querySelectorAll('[data-settings-section]').forEach((button) => {
     const selected = button.dataset.settingsSection === state.settingsSection;
     button.setAttribute('aria-selected', String(selected));
@@ -64,7 +67,7 @@ function showSettingsTab(section, updateUrl = true, focus = false) {
     if (selected && focus) button.focus();
   });
   document.querySelectorAll('[data-settings-panel]').forEach((panel) => { panel.hidden = panel.dataset.settingsPanel !== state.settingsSection; });
-  $('capability-settings').hidden = state.settingsSection === 'general';
+  $('capability-settings').hidden = !['tools', 'extensions'].includes(state.settingsSection);
   if (updateUrl && state.currentView === 'settings') writeRoute();
 }
 
@@ -89,7 +92,7 @@ function restoreRoute() {
 }
 
 function updateCurl() {
-  const body = { model: $('model').value || 'provider/model', messages: [{ role: 'user', content: 'Hello, Pi!' }], stream: true };
+  const body = { model: $('model').value || state.config?.defaultModel || 'deepseek-chat', messages: [{ role: 'user', content: 'Hello, Pi!' }], stream: true };
   if ($('effort').value) body.reasoning_effort = $('effort').value;
   const lines = [`curl ${baseUrl()}/chat/completions \\`, '  -H "Content-Type: application/json" \\'];
   if (state.config?.apiKeyConfigured) lines.push('  -H "Authorization: Bearer YOUR_API_KEY" \\');
@@ -100,6 +103,23 @@ function updateCurl() {
 
 function applyConfig(config) {
   state.config = config;
+  $('model-base-url').value = config.modelBaseUrl ?? 'https://api.deepseek.com/v1';
+  $('default-model').value = config.defaultModel ?? 'deepseek-chat';
+  $('model-context-window').value = config.modelContextWindow ?? 131072;
+  $('model-max-tokens').value = config.modelMaxTokens ?? 8192;
+  $('enable-research').checked = config.enableResearch !== false;
+  $('brave-base-url').value = config.braveBaseUrl ?? 'https://brave.vastiny.com/res/v1';
+  $('tavily-base-url').value = config.tavilyBaseUrl ?? 'https://tavily.vastiny.com';
+  $('max-tool-rounds').value = config.maxToolRounds ?? 8;
+  $('request-timeout').value = config.requestTimeoutSeconds ?? 300;
+  $('http-tools').value = JSON.stringify(config.httpTools ?? [], null, 2);
+  $('http-tools').setCustomValidity('');
+  clearedSecrets.clear();
+  for (const [field, id] of Object.entries(SECRET_FIELDS)) {
+    $(id).value = '';
+    $(id).placeholder = config[`${field}Configured`] ? `当前 ${config[`${field}Preview`] || '已配置'} · 留空保留` : '未配置 · 可输入密钥';
+    $(`${field}-status`).textContent = config[`${field}Configured`] ? '已配置' : '未配置';
+  }
   $('max-sessions').value = config.maxSessions ?? 8;
   $('idle-timeout').value = config.idleTimeoutMinutes ?? 30;
   $('save-sessions').checked = config.saveSessions === true;
@@ -288,7 +308,9 @@ function renderRuntimeDiagnostics(pi = {}) {
   } else if (!hasTools) {
     $('tool-guidance').textContent = pi.error || '尚未获取 Pi RPC 工具信息。请刷新诊断；模型的自述不能代替实际工具名单。';
   } else {
-    $('tool-guidance').textContent = '以上为 Pi RPC 实际启用的工具。独立搜索 / 浏览工具由扩展或 MCP 提供；工具名称本身不能证明网络可用性。';
+    $('tool-guidance').textContent = tools.includes('web_search')
+      ? '内置研究工具已就绪，搜索和网页服务凭证在「服务设置 → 搜索与网页」中配置。以上是可用工具，实际调用可在本轮记录中查看。'
+      : '以上为 Pi RPC 实际启用的工具。可在「服务设置 → 搜索与网页」启用内置研究工具，也可使用外部扩展或 MCP。';
   }
   $('runtime-version').textContent = pi.version || '未获取';
   $('runtime-workdir').textContent = pi.workdir || state.config?.workdir || '未获取';
@@ -365,7 +387,8 @@ async function loadModels(userTriggered = false) {
     const result = await api('/api/models');
     const selected = $('model').value;
     const selectedEffort = $('effort').value;
-    state.models = result.models || [];
+    const preferred = `picall/${state.config?.defaultModel || 'deepseek-chat'}`;
+    state.models = [...(result.models || [])].sort((a, b) => Number(b.id === preferred) - Number(a.id === preferred));
     const fragment = document.createDocumentFragment();
     state.models.forEach((model) => {
       const option = document.createElement('option');
@@ -381,7 +404,7 @@ async function loadModels(userTriggered = false) {
     if (state.models.some(model => model.id === selected)) $('model').value = selected;
     if ($('model').value !== selected) state.sessionId = null;
     $('model-count').textContent = String(state.models.length);
-    $('model-help').textContent = result.error || (state.models.length ? `${state.models.length} 个 Pi 可用模型。此处只读展示，不设置服务默认模型。` : '暂无可用模型。请先通过 picall pi 完成模型认证，再刷新。');
+    $('model-help').textContent = result.error || (state.models.length ? `${state.models.length} 个可用模型。默认模型：${state.config?.defaultModel || '未设置'}，可在「服务设置 → 模型网关」修改。` : '暂无可用模型。请在「服务设置 → 模型网关」配置模型服务并保存，再刷新。');
     renderModelCatalog();
     updateRequestModel();
     if ($('effort').value !== selectedEffort) state.sessionId = null;
@@ -413,6 +436,20 @@ function formatTokens(value) {
   return Number.isFinite(value) ? `${value.toLocaleString()} tokens` : '未报告';
 }
 
+function validateHttpTools() {
+  let message = '';
+  try {
+    const tools = JSON.parse($('http-tools').value);
+    if (!Array.isArray(tools)) message = '工具定义必须是 JSON 数组；无工具时填写 []。';
+  } catch { message = '请输入有效 JSON；无工具时填写 []。'; }
+  $('http-tools').setCustomValidity(message);
+}
+
+function validateModelCapacity() {
+  const tooLarge = Number($('model-max-tokens').value) > Number($('model-context-window').value);
+  $('model-max-tokens').setCustomValidity(tooLarge ? '最大输出不能超过上下文窗口。' : '');
+}
+
 function updateRequestModel() {
   const selected = state.models.find(model => model.id === $('model').value);
   const previous = $('effort').value;
@@ -425,7 +462,7 @@ function updateRequestModel() {
   if ((selected?.reasoningEfforts || []).includes(previous)) $('effort').value = previous;
   $('request-model-info').textContent = selected
     ? `Pi 模型上限：上下文 ${formatTokens(selected.contextWindow)} · 最大输出 ${formatTokens(selected.maxTokens)}。上下文窗口由 Pi 的模型配置决定。`
-    : '先配置 Pi 的模型认证，再刷新模型目录。';
+    : '先在「服务设置 → 模型网关」配置服务，再刷新模型目录。';
   updateCurl();
 }
 
@@ -434,6 +471,8 @@ async function saveConfig(event) {
   if (!state.config) { toast('配置尚未读取，无法安全保存。请刷新页面后重试。', true); return; }
   if (state.controller) { toast('请等待本轮完成或停止后，再保存设置。', true); return; }
   validateAdditionalSystemPrompt();
+  validateHttpTools();
+  validateModelCapacity();
   const form = $('config-form');
   if (!form.checkValidity()) {
     const invalid = Array.from(form.elements).find((element) => element.willValidate && !element.validity.valid);
@@ -458,7 +497,21 @@ async function saveConfig(event) {
     toolOverrides: cloneOverrides(state.toolOverrides),
     extensionOverrides: cloneOverrides(state.extensionOverrides),
     projectTrust: $('project-trust').value,
+    modelBaseUrl: $('model-base-url').value.trim(),
+    defaultModel: $('default-model').value.trim(),
+    modelContextWindow: Number($('model-context-window').value),
+    modelMaxTokens: Number($('model-max-tokens').value),
+    enableResearch: $('enable-research').checked,
+    braveBaseUrl: $('brave-base-url').value.trim(),
+    tavilyBaseUrl: $('tavily-base-url').value.trim(),
+    maxToolRounds: Number($('max-tool-rounds').value),
+    requestTimeoutSeconds: Number($('request-timeout').value),
+    httpTools: JSON.parse($('http-tools').value),
   };
+  for (const [field, id] of Object.entries(SECRET_FIELDS)) {
+    if ($(id).value) patch[field] = $(id).value;
+    else if (clearedSecrets.has(field)) patch[field] = '';
+  }
   if ($('disable-key').checked) patch.apiKey = '';
   else if ($('api-key').value) patch.apiKey = $('api-key').value;
   try {
@@ -470,7 +523,7 @@ async function saveConfig(event) {
     applyConfig(config);
     $('save-state').replaceChildren(dot('green'), document.createTextNode('已保存到本机'));
     toast('设置已保存，新会话将使用新配置。');
-    await Promise.all([loadStatus(), loadCapabilities()]);
+    await Promise.all([loadStatus(), loadCapabilities(), loadModels()]);
   } catch (error) {
     toast(error.message, true);
   } finally {
@@ -652,6 +705,8 @@ async function runPrompt(event) {
     return;
   }
   state.controller = new AbortController();
+  activeRequest = { runId: null, cancelRequested: false, cancelPromise: null, controller: state.controller };
+  const active = activeRequest;
   state.toolRun = { startedAt: Date.now(), endedAt: null, sessionId: state.sessionId, phase: 'running', calls: [], seen: new Set() };
   renderToolRun();
   $('run-button').disabled = true;
@@ -666,6 +721,7 @@ async function runPrompt(event) {
   $('response-meta').textContent = '正在连接 Pi…';
   const headers = { 'Content-Type': 'application/json' };
   if (state.config.apiKeyConfigured) headers.Authorization = `Bearer ${$('api-key').value}`;
+  active.headers = headers;
   if (state.sessionId) headers['X-Session-Id'] = state.sessionId;
   const started = performance.now();
   let outcome = 'error';
@@ -678,6 +734,16 @@ async function runPrompt(event) {
       throw new Error(error.error?.message || `请求失败 (${response.status})`);
     }
     state.sessionId = response.headers.get('X-Session-Id') || state.sessionId;
+    active.runId = response.headers.get('X-Run-Id');
+    if (active.cancelRequested) {
+      try {
+        await cancelRun(active);
+        throw new DOMException('Cancelled', 'AbortError');
+      } catch (error) {
+        if (error.name === 'AbortError') throw error;
+        active.cancelRequested = false;
+      }
+    }
     state.toolRun.sessionId = state.sessionId;
     state.logs.forEach(observeToolLog);
     $('response-meta').textContent = 'Pi 正在执行任务…';
@@ -717,6 +783,7 @@ async function runPrompt(event) {
   } finally {
     finishToolRun(outcome);
     state.controller = null;
+    activeRequest = null;
     $('run-button').disabled = false;
     $('new-session').disabled = false;
     $('save-button').disabled = false;
@@ -726,6 +793,30 @@ async function runPrompt(event) {
     $('stop-button').hidden = true;
     void Promise.all([loadStatus(), loadSessions()]);
   }
+}
+
+function cancelRun(active) {
+  if (!active.runId) return Promise.resolve();
+  if (!active.cancelPromise) active.cancelPromise = api(`/v1/runs/${encodeURIComponent(active.runId)}/cancel`, { method: 'POST', headers: active.headers }).then(() => {
+    active.controller.abort();
+  }).catch(error => {
+    active.cancelPromise = null;
+    $('response-meta').textContent = `取消未确认：${error.message}。任务可能仍在后台执行。`;
+    toast(`取消任务失败：${error.message}`, true);
+    throw error;
+  });
+  return active.cancelPromise;
+}
+
+async function stopRun() {
+  const active = activeRequest;
+  if (!active) return;
+  active.cancelRequested = true;
+  $('stop-button').disabled = true;
+  $('response-meta').textContent = active.runId ? '正在取消任务…' : '等待任务 ID 后取消…';
+  try { await cancelRun(active); }
+  catch { /* Keep waiting available so users can retry cancellation. */ }
+  finally { $('stop-button').disabled = false; }
 }
 
 document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => showView(button.dataset.view)));
@@ -750,6 +841,28 @@ $('model').addEventListener('change', () => { state.sessionId = null; updateRequ
 $('effort').addEventListener('change', () => { state.sessionId = null; updateCurl(); });
 $('project-trust').addEventListener('change', updateProjectTrustHelp);
 $('additional-system-prompt').addEventListener('input', validateAdditionalSystemPrompt);
+$('http-tools').addEventListener('input', validateHttpTools);
+$('model-context-window').addEventListener('input', validateModelCapacity);
+$('model-max-tokens').addEventListener('input', validateModelCapacity);
+document.querySelectorAll('[data-secret]').forEach((button) => {
+  const field = button.dataset.secret;
+  const input = $(SECRET_FIELDS[field]);
+  button.addEventListener('click', () => {
+    input.value = '';
+    clearedSecrets.add(field);
+    input.placeholder = '保存后清除 · 输入新密钥可替换';
+    $(`${field}-status`).textContent = '待清除';
+    toast('已标记清除，保存设置后生效。');
+  });
+  input.addEventListener('input', () => {
+    if (input.value) {
+      clearedSecrets.delete(field);
+      $(`${field}-status`).textContent = '待保存';
+    } else {
+      $(`${field}-status`).textContent = clearedSecrets.has(field) ? '待清除' : state.config?.[`${field}Configured`] ? '已配置' : '未配置';
+    }
+  });
+});
 $('refresh-capabilities').addEventListener('click', () => loadCapabilities(true));
 $('enable-extensions').addEventListener('change', () => { $('extension-master-note').hidden = $('enable-extensions').checked; });
 $('refresh-tools').addEventListener('click', async () => {
@@ -784,7 +897,7 @@ $('new-session').addEventListener('click', () => {
   renderToolRun();
   toast('下次请求将开启新会话。');
 });
-$('stop-button').addEventListener('click', () => state.controller?.abort());
+$('stop-button').addEventListener('click', stopRun);
 $('log-level').addEventListener('change', renderLogs);
 $('log-search').addEventListener('input', renderLogs);
 $('pause-logs').addEventListener('click', () => {

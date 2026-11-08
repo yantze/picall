@@ -5,13 +5,20 @@ import { randomUUID } from 'node:crypto';
 
 export const EFFORTS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 export const PROJECT_TRUST = ['default', 'allow', 'deny'];
-export const DEFAULT_ADDITIONAL_SYSTEM_PROMPT = '每一次 turn 中，和工具的交互层数最大是 2 次。';
+export const DEFAULT_ADDITIONAL_SYSTEM_PROMPT = '按问题复杂度使用工具：简单事实优先一次搜索和一个权威来源，证据充分后立即回答；复杂研究按需补查。';
+export const SECRET_FIELDS = ['apiKey', 'modelApiKey', 'braveApiKey', 'tavilyApiKey', 'tinyfishApiKey', 'exaApiKey', 'jinaApiKey'];
 export const DEFAULTS = Object.freeze({
   host: '127.0.0.1', port: 8787,
   apiKey: '', workdir: process.cwd(), maxSessions: 8, idleTimeoutMinutes: 30,
   requestTimeoutSeconds: 300, projectTrust: 'default', saveSessions: false, enableSkills: false,
   toolOverrides: Object.freeze({}), enableExtensions: true, extensionOverrides: Object.freeze({}),
   additionalSystemPrompt: DEFAULT_ADDITIONAL_SYSTEM_PROMPT,
+  modelBaseUrl: 'https://api.deepseek.com/v1', modelApiKey: '', defaultModel: 'deepseek-chat',
+  modelContextWindow: 131072, modelMaxTokens: 8192,
+  enableResearch: true, maxToolRounds: 8,
+  braveApiKey: '', tavilyApiKey: '', tinyfishApiKey: '', exaApiKey: '', jinaApiKey: '',
+  braveBaseUrl: 'https://brave.vastiny.com/res/v1', tavilyBaseUrl: 'https://tavily.vastiny.com',
+  httpTools: Object.freeze([]),
 });
 
 export const canonicalOverrides = (value = {}) => Object.fromEntries(Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
@@ -53,6 +60,31 @@ function validate(values) {
     (isAbsolute(name) || /^builtin:[A-Za-z0-9_.-]+$/.test(name)), 128 * 1024);
   if (typeof values.apiKey !== 'string' || (values.apiKey && (!/^[\x21-\x7e]{8,256}$/.test(values.apiKey)))) throw appError('API key must contain 8–256 visible ASCII characters (or be empty to disable authentication).');
   if (typeof values.workdir !== 'string' || !isAbsolute(values.workdir)) throw appError('workdir must be an absolute path.');
+  for (const field of ['modelBaseUrl', 'braveBaseUrl', 'tavilyBaseUrl']) {
+    let url;
+    try { url = new URL(values[field]); } catch { throw appError(`${field} must be an HTTP(S) URL.`); }
+    if (typeof values[field] !== 'string' || !['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw appError(`${field} must be an HTTP(S) base URL without credentials, query, or fragment.`);
+  }
+  for (const field of SECRET_FIELDS.filter(field => field !== 'apiKey')) {
+    if (typeof values[field] !== 'string' || values[field].length > 4096 || /[\u0000-\u0020\u007f]/.test(values[field])) throw appError(`${field} must be a key without whitespace or control characters (or empty).`);
+  }
+  if (typeof values.defaultModel !== 'string' || !values.defaultModel || values.defaultModel.length > 256 || /[\s\u0000-\u001f\u007f]/.test(values.defaultModel)) throw appError('defaultModel must be a nonempty model ID without whitespace.');
+  for (const [field, min, max] of [['modelContextWindow', 1024, 2000000], ['modelMaxTokens', 1, 200000], ['maxToolRounds', 1, 64]]) {
+    if (!Number.isInteger(values[field]) || values[field] < min || values[field] > max) throw appError(`${field} must be an integer between ${min} and ${max}.`);
+  }
+  if (values.modelMaxTokens > values.modelContextWindow) throw appError('modelMaxTokens must not exceed modelContextWindow.');
+  if (typeof values.enableResearch !== 'boolean') throw appError('enableResearch must be a boolean.');
+  if (!Array.isArray(values.httpTools) || values.httpTools.length > 32 || Buffer.byteLength(JSON.stringify(values.httpTools)) > 65536) throw appError('httpTools must be an array of at most 32 tools and 64 KiB.');
+  const names = new Set(['web_search', 'fetch_content', 'get_search_content']);
+  for (const tool of values.httpTools) {
+    if (!tool || typeof tool !== 'object' || Array.isArray(tool) || Object.keys(tool).some(key => !['name', 'description', 'url', 'parameters'].includes(key)) || !/^[a-z][a-z0-9_]{0,63}$/.test(tool.name) || names.has(tool.name)) throw appError('HTTP tools need unique lowercase names and only name, description, url, parameters fields.');
+    names.add(tool.name);
+    if (typeof tool.description !== 'string' || !tool.description || tool.description.length > 2000) throw appError('HTTP tools need a description of 1–2000 characters.');
+    let url;
+    try { url = new URL(tool.url); } catch { throw appError('HTTP tool URL must use HTTP(S).'); }
+    if (typeof tool.url !== 'string' || !['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw appError('HTTP tool URL must use HTTP(S) without embedded credentials.');
+    if (!tool.parameters || tool.parameters.type !== 'object' || !tool.parameters.properties || typeof tool.parameters.properties !== 'object' || Array.isArray(tool.parameters.properties)) throw appError('HTTP tool parameters must be a JSON Schema object with properties.');
+  }
 }
 
 export class ConfigStore {
@@ -77,13 +109,19 @@ export class ConfigStore {
     return this.value;
   }
   public() {
-    const { apiKey, ...rest } = this.value;
-    return { ...rest, apiKeyConfigured: Boolean(apiKey), apiKeyPreview: apiKey ? `••••${apiKey.slice(-4)}` : '' };
+    const rest = { ...this.value };
+    for (const field of SECRET_FIELDS) {
+      const key = rest[field];
+      delete rest[field];
+      rest[`${field}Configured`] = Boolean(key);
+      rest[`${field}Preview`] = key ? `••••${key.length > 4 ? key.slice(-4) : ''}` : '';
+    }
+    return rest;
   }
   update(patch) {
     const operation = this.queue.then(async () => {
       if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw appError('Settings must be a JSON object.');
-      const allowed = ['apiKey', 'maxSessions', 'idleTimeoutMinutes', 'requestTimeoutSeconds', 'projectTrust', 'saveSessions', 'enableSkills', 'toolOverrides', 'enableExtensions', 'extensionOverrides', 'additionalSystemPrompt'];
+      const allowed = Object.keys(DEFAULTS).filter(key => !['host', 'port', 'workdir'].includes(key));
       for (const key of Object.keys(patch)) if (!allowed.includes(key)) throw appError(`Setting is read-only or unknown: ${key}`);
       const merged = { ...this.value, ...patch };
       validate(merged);

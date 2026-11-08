@@ -9,7 +9,7 @@ import { Logger } from '../src/logger.js';
 
 // Keep this literal independent of the implementation so punctuation and the
 // runtime fallback are checked against the requested default.
-const DEFAULT_ADDITION = '每一次 turn 中，和工具的交互层数最大是 2 次。';
+const DEFAULT_ADDITION = '按问题复杂度使用工具：简单事实优先一次搜索和一个权威来源，证据充分后立即回答；复杂研究按需补查。';
 const NATIVE_PREFIX = 'You are an expert coding assistant operating inside pi, a coding agent harness.';
 
 function systemText(request) {

@@ -1,9 +1,10 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
-import { randomBytes, randomUUID, timingSafeEqual, createHash } from 'node:crypto';
+import { randomBytes, timingSafeEqual, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { appError, EFFORTS } from './config.js';
 import { VERSION } from './version.js';
+import { LocalRuns } from './runs.js';
 
 const assets = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
@@ -104,6 +105,59 @@ export function createApp({ configStore, runtime, logger }) {
   const connections = new Set();
   const logClients = new Set();
   let closing = false;
+  const runs = new LocalRuns({ dataDir: configStore.dataDir, execute: executeCompletion });
+  const ready = runs.open();
+  // Route handlers await startup too, so corrupt persisted state fails visibly.
+  ready.catch(() => {});
+  async function prepare(input) {
+    normalize(input);
+    if (input.model !== undefined && (typeof input.model !== 'string' || !input.model.trim())) throw appError('model must be a nonempty model ID.', 400, 'invalid_request', 'model');
+    const requested = input.model || configStore.value.defaultModel;
+    const models = await runtime.models();
+    const exact = models.find(model => model.id === requested);
+    const managed = models.find(model => model.id === `picall/${requested}`);
+    const selected = input.model === undefined ? managed || exact : exact || managed;
+    if (!selected) throw appError(`Model is unavailable: ${requested}. Configure the model gateway in the local settings page, or use /v1/models.`, 404, 'model_not_found', 'model');
+    const effort = input.reasoning_effort === 'none' ? 'off' : input.reasoning_effort ?? undefined;
+    if (effort !== undefined && !selected.reasoningEfforts.includes(effort)) throw appError(`This model does not support reasoning_effort ${effort}. Supported: ${selected.reasoningEfforts.join(', ')}.`, 400, 'unsupported_effort', 'reasoning_effort');
+    return { ...input, model: selected.id };
+  }
+  async function submit(input, options) {
+    normalize(input);
+    const previous = await runs.lookup(input, options);
+    if (previous) return previous;
+    return runs.submit(await prepare(input), { ...options, identityInput: input });
+  }
+  async function executeCompletion(input, { signal, sessionId, runId }) {
+    const normalized = normalize(input);
+    const liveIds = new Set(runtime.list().map(session => session.id));
+    for (const id of conversations.keys()) if (!liveIds.has(id)) conversations.delete(id);
+    const previous = conversations.get(sessionId);
+    let promptMessages = normalized.messages;
+    const systemPrompt = normalized.hasSystemPrompt ? normalized.systemPrompt : previous?.systemPrompt || '';
+    if (previous && normalized.messages.length > 1) {
+      const prefix = normalized.messages.slice(0, previous.count).map(messageHash);
+      if (normalized.messages.length !== previous.count + 1 || JSON.stringify(prefix) !== JSON.stringify(previous.hashes)) throw appError('Session history does not match. Send only the next user message or the unchanged full history; use a new X-Session-Id to branch.', 409, 'session_history_conflict');
+      promptMessages = normalized.messages.slice(previous.count);
+    }
+    const session = await runtime.acquire({ sessionId, model: input.model, systemPrompt, effort: input.reasoning_effort === 'none' ? 'off' : input.reasoning_effort ?? undefined });
+    const created = Math.floor(Date.now() / 1000);
+    logger.log('info', 'Completion started', { requestId: runId, sessionId, model: session.model });
+    const result = await session.run(promptFor(promptMessages), { signal });
+    const newMessages = [...(previous ? promptMessages : normalized.messages), { role: 'assistant', content: result.text }];
+    const hashes = [...(previous?.hashes || []), ...newMessages.map(messageHash)].slice(0, 500);
+    conversations.set(session.id, { hashes, count: (previous?.count || 0) + newMessages.length, systemPrompt });
+    logger.log('info', 'Completion finished', { requestId: runId, sessionId, usage: result.usage });
+    return { id: runId, object: 'chat.completion', created, model: session.model || input.model,
+      choices: [{ index: 0, message: { role: 'assistant', content: result.text }, finish_reason: result.finishReason || 'stop' }], usage: result.usage };
+  }
+  function admissionOptions(req) {
+    const sessionId = req.headers['x-session-id'];
+    if (sessionId !== undefined && (typeof sessionId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(sessionId))) throw appError('X-Session-Id must be 1–128 letters, digits, dots, underscores, or hyphens.');
+    const idempotencyKey = req.headers['idempotency-key'];
+    if (idempotencyKey !== undefined && (typeof idempotencyKey !== 'string' || !/^[\x21-\x7e]{1,256}$/.test(idempotencyKey))) throw appError('Idempotency-Key must contain 1–256 visible ASCII characters.');
+    return { sessionId, idempotencyKey };
+  }
   const server = createServer(async (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');
@@ -111,6 +165,7 @@ export function createApp({ configStore, runtime, logger }) {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     try {
+      await ready;
       if (!safeHost(req)) throw appError('Untrusted Host header.', 403, 'forbidden');
       const url = new URL(req.url, `http://${req.headers.host}`);
       const path = url.pathname;
@@ -122,9 +177,9 @@ export function createApp({ configStore, runtime, logger }) {
         if (!sameOrigin(req) && !configStore.value.apiKey) throw appError('Set an API key before enabling cross-origin API requests.', 403, 'forbidden');
         if (req.headers.origin) {
           res.setHeader('Access-Control-Allow-Origin', '*');
-          res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-Session-Id');
+          res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-Session-Id, Idempotency-Key');
           res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-          res.setHeader('Access-Control-Expose-Headers', 'X-Session-Id');
+          res.setHeader('Access-Control-Expose-Headers', 'X-Session-Id, X-Run-Id');
         }
         if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
         if (!authorized(req, configStore.value.apiKey)) throw appError('Invalid or missing API key.', 401, 'invalid_api_key');
@@ -185,65 +240,52 @@ export function createApp({ configStore, runtime, logger }) {
         res.on('close', () => { clearInterval(heartbeat); logger.off('log', listener); logClients.delete(res); });
         return;
       }
+      const runRoute = /^\/v1\/runs\/([^/]+)(\/cancel)?$/.exec(path);
+      if (runRoute && req.method === 'GET' && !runRoute[2]) return json(res, 200, await runs.get(runRoute[1]));
+      if (runRoute && req.method === 'POST' && runRoute[2]) return json(res, 200, await runs.cancel(runRoute[1]));
+      if (path === '/v1/runs' && req.method === 'POST') {
+        const data = await body(req);
+        if (typeof data.prompt !== 'string' || !data.prompt.trim()) throw appError('prompt must be nonempty text.');
+        const input = { messages: [{ role: 'user', content: data.prompt }], ...(data.model === undefined ? {} : { model: data.model }) };
+        const run = await submit(input, admissionOptions(req));
+        res.setHeader('X-Session-Id', run.sessionId);
+        res.setHeader('X-Run-Id', run.id);
+        res.setHeader('Location', `/v1/runs/${run.id}`);
+        return json(res, 202, run);
+      }
       if (path === '/v1/chat/completions' && req.method === 'POST') {
         metrics.total++; metrics.active++;
-        const requestId = `chatcmpl-${randomUUID()}`;
         const controller = new AbortController();
         const disconnect = () => { if (!res.writableEnded) controller.abort(); };
         res.on('close', disconnect);
         let heartbeat;
+        let requestId;
         try {
           const input = await body(req);
-          const normalized = normalize(input);
-          if (typeof input.model !== 'string' || !input.model.trim()) throw appError('model is required. Use a provider/model ID from /v1/models.', 400, 'invalid_request', 'model');
-          const model = input.model;
-          const selected = (await runtime.models()).find(m => m.id === model);
-          if (!selected) throw appError(`Model is unavailable: ${model}. Use /v1/models to discover models configured in Pi.`, 404, 'model_not_found', 'model');
-          const effort = input.reasoning_effort === 'none' ? 'off' : input.reasoning_effort ?? undefined;
-          if (effort !== undefined && !selected.reasoningEfforts.includes(effort)) throw appError(`This model does not support reasoning_effort ${effort}. Supported: ${selected.reasoningEfforts.join(', ')}.`, 400, 'unsupported_effort', 'reasoning_effort');
-          const rawSession = req.headers['x-session-id'];
-          if (rawSession !== undefined && (typeof rawSession !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(rawSession))) throw appError('X-Session-Id must be 1–128 letters, digits, dots, underscores, or hyphens.');
-          const liveIds = new Set(runtime.list().map(s => s.id));
-          for (const id of conversations.keys()) if (!liveIds.has(id)) conversations.delete(id);
-          const previous = rawSession ? conversations.get(rawSession) : undefined;
-          let promptMessages = normalized.messages;
-          const systemPrompt = normalized.hasSystemPrompt ? normalized.systemPrompt : previous?.systemPrompt || '';
-          if (previous && normalized.messages.length > 1) {
-            const prefix = normalized.messages.slice(0, previous.count).map(messageHash);
-            if (normalized.messages.length !== previous.count + 1 || JSON.stringify(prefix) !== JSON.stringify(previous.hashes)) throw appError('Session history does not match. Send only the next user message or the unchanged full history; use a new X-Session-Id to branch.', 409, 'session_history_conflict');
-            promptMessages = normalized.messages.slice(previous.count);
-          }
-          const session = await runtime.acquire({ sessionId: rawSession, model, systemPrompt, effort });
-          if (controller.signal.aborted) {
-            // run() owns the session lease and releases it even when already aborted.
-            await session.run('', { signal: controller.signal });
-            return;
-          }
-          res.setHeader('X-Session-Id', session.id);
+          normalize(input);
+          // Stream preference does not change the durable task identity.
+          const { stream, stream_options, ...task } = input;
+          const run = await submit(task, admissionOptions(req));
+          requestId = run.id;
+          res.setHeader('X-Session-Id', run.sessionId);
+          res.setHeader('X-Run-Id', run.id);
           const created = Math.floor(Date.now() / 1000);
-          const responseModel = session.model || model || 'pi';
-          const chunk = (delta, finishReason = null, usage) => ({ id: requestId, object: 'chat.completion.chunk', created, model: responseModel,
+          const chunk = (delta, finishReason = null, usage) => ({ id: requestId, object: 'chat.completion.chunk', created, model: run.model || run.completion?.model || input.model,
             choices: [{ index: 0, delta, finish_reason: finishReason }], ...(usage ? { usage } : {}) });
-          if (input.stream) {
+          if (stream) {
             res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Connection': 'keep-alive', 'X-Accel-Buffering': 'no' });
             res.write(`data: ${JSON.stringify(chunk({ role: 'assistant', content: '' }))}\n\n`);
             heartbeat = setInterval(() => res.write(': heartbeat\n\n'), 15000);
           }
-          logger.log('info', 'Completion started', { requestId, sessionId: session.id, model: responseModel, stream: Boolean(input.stream) });
-          const result = await session.run(promptFor(promptMessages), { signal: controller.signal,
-            onText: delta => { if (input.stream && !res.destroyed) { res.write(`data: ${JSON.stringify(chunk({ content: delta }))}\n\n`); if (res.writableLength > 2 * 1024 * 1024) controller.abort(); } } });
-          // Keep bounded fingerprints for full-history consistency, not another
-          // unbounded copy of Pi's (potentially compacted) conversation content.
-          const newMessages = [...(previous ? promptMessages : normalized.messages), { role: 'assistant', content: result.text }];
-          const hashes = [...(previous?.hashes || []), ...newMessages.map(messageHash)].slice(0, 500);
-          conversations.set(session.id, { hashes, count: (previous?.count || 0) + newMessages.length, systemPrompt });
-          logger.log('info', 'Completion finished', { requestId, sessionId: session.id, usage: result.usage });
-          if (input.stream) {
-            res.write(`data: ${JSON.stringify(chunk({}, result.finishReason || 'stop'))}\n\n`);
-            if (input.stream_options?.include_usage) res.write(`data: ${JSON.stringify({ id: requestId, object: 'chat.completion.chunk', created, model: responseModel, choices: [], usage: result.usage })}\n\n`);
+          const finished = await runs.wait(run.id, { signal: controller.signal });
+          if (finished.status !== 'completed') throw Object.assign(new Error(finished.error?.message || 'Run did not complete.'), { code: finished.error?.code || 'run_failed', status: finished.error?.status || 502, param: finished.error?.param });
+          const result = finished.completion;
+          if (stream) {
+            res.write(`data: ${JSON.stringify(chunk({ content: result.choices[0].message.content }))}\n\n`);
+            res.write(`data: ${JSON.stringify(chunk({}, result.choices[0].finish_reason))}\n\n`);
+            if (stream_options?.include_usage) res.write(`data: ${JSON.stringify({ id: requestId, object: 'chat.completion.chunk', created, model: result.model, choices: [], usage: result.usage })}\n\n`);
             res.end('data: [DONE]\n\n');
-          } else json(res, 200, { id: requestId, object: 'chat.completion', created, model: responseModel,
-            choices: [{ index: 0, message: { role: 'assistant', content: result.text }, finish_reason: result.finishReason || 'stop' }], usage: result.usage });
+          } else json(res, 200, result);
         } catch (error) {
           metrics.failed++;
           logger.log('warn', 'Completion failed', { requestId, code: error.code || 'internal_error', status: error.status || 502 });
@@ -267,11 +309,14 @@ export function createApp({ configStore, runtime, logger }) {
     if (closing) return;
     closing = true;
     for (const res of logClients) res.end();
-    await runtime.close();
+    let shutdownError;
+    try { await runs.close(); } catch (error) { shutdownError = error; }
+    try { await runtime.close(); } catch (error) { shutdownError ||= error; }
     await new Promise(resolve => {
       server.close(resolve);
       for (const socket of connections) socket.destroy();
     });
+    if (shutdownError) throw shutdownError;
   }
-  return { server, close };
+  return { server, close, ready };
 }
