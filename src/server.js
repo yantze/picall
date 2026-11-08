@@ -91,6 +91,13 @@ function sameOrigin(req) {
   if (!req.headers.origin) return true;
   return req.headers.origin === `http://${req.headers.host}`;
 }
+function opensManagementPage(req, path) {
+  // Following a link from another site is a legitimate entry to the local UI.
+  // Only the HTML shell is public to a top-level browser navigation; config,
+  // keys, subresources and state-changing requests retain origin checks.
+  return req.method === 'GET' && path === '/' &&
+    req.headers['sec-fetch-mode'] === 'navigate' && req.headers['sec-fetch-dest'] === 'document';
+}
 function authorized(req, apiKey) {
   if (!apiKey) return true;
   const actual = Buffer.from(req.headers.authorization || '');
@@ -171,7 +178,7 @@ export function createApp({ configStore, runtime, logger }) {
       const path = url.pathname;
       if (closing) throw appError('Service is shutting down.', 503, 'unavailable');
       if (path.startsWith('/api/') || assets.has(path)) {
-        if (!sameOrigin(req)) throw appError('Cross-origin management access is forbidden.', 403, 'forbidden');
+        if (!sameOrigin(req) && !opensManagementPage(req, path)) throw appError('Cross-origin management access is forbidden.', 403, 'forbidden');
       }
       if (path.startsWith('/v1/')) {
         if (!sameOrigin(req) && !configStore.value.apiKey) throw appError('Set an API key before enabling cross-origin API requests.', 403, 'forbidden');

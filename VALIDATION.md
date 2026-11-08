@@ -6,7 +6,7 @@
 
 运行环境：Node.js 24.19.0，Linux；依赖通过 `npm ci` 安装，Pi coding agent / Pi AI 固定为 1.4.0。未新增 Cloudflare 运行时依赖，不需要构建或 Wrangler。
 
-最终执行结果：`npm run check` 通过；`npm test` **152/152 通过**（约 23 秒，无跳过）；`npm pack --dry-run` 与 `git diff --check` 通过。测试使用 `test/isolate.mjs` 强制隔离临时 Pi profile，禁止读取开发者真实 `~/.pi` 配置；fixture 使用虚拟密钥。
+本地版初次交付的全量执行结果：`npm run check` 通过；`npm test` **152/152 通过**（约 23 秒，无跳过）；`npm pack --dry-run` 与 `git diff --check` 通过。测试使用 `test/isolate.mjs` 强制隔离临时 Pi profile，禁止读取开发者真实 `~/.pi` 配置；fixture 使用虚拟密钥。
 
 覆盖内容：
 
@@ -28,6 +28,12 @@
 2. 实际 `bin/picall.js` 服务 + 真实 Pi + 本地模拟模型：通过浏览器保存模型地址与 key，核对配置落盘/GET 脱敏，刷新页面保持配置，发现 `picall/browser-model`，网页发送 SSE 请求返回最终答案，核对仅一次模型请求、run 查询为 completed、usage 22 tokens、无浏览器异常。退出后关闭服务和临时目录。
 
 截图仅展示测试配置与虚拟密钥状态，没有读取或迁移真实用户凭证。
+
+## 从其他网页打开管理页的修复
+
+之前将 `Sec-Fetch-Site: cross-site` 一律拒绝，导致从聊天等网页点击本地地址进入首页也返回 403。现在只允许 GET 首页的顶层 document navigation 打开 HTML 页面；跨来源配置/密钥接口、iframe、跨来源 fetch、修改请求以及不可信 Host 仍拒绝。
+
+本次验证：服务端测试 **49/49 通过**，包含新导航回归及既有鉴权/配置/任务接口测试；语法与 diff 检查通过。真实 Chromium 从 `localhost` 测试网页点击链接进入 `127.0.0.1` 的实际 CLI 管理页面，确认浏览器实际发送 cross-site / navigate / document 并成功打开；随后保存配置、刷新、真实 Pi 配合模拟模型完成 SSE 和结果查询，全部通过。
 
 ## 尚未进行的真实联调
 

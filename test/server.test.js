@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { once } from 'node:events';
+import { get as httpGet } from 'node:http';
 import { createApp } from '../src/server.js';
 import { ConfigStore } from '../src/config.js';
 import { Logger } from '../src/logger.js';
@@ -207,6 +208,38 @@ test('cross-origin browser requests cannot mutate local management settings', as
   } });
   assert.notEqual(preflight.headers.get('access-control-allow-origin'), '*');
   assert.notEqual(preflight.headers.get('access-control-allow-origin'), 'https://untrusted.example');
+});
+
+test('cross-site top-level navigation may open the UI without allowing cross-origin management APIs', async t => {
+  const { request, base } = await setup(t);
+  // fetch() rewrites Sec-Fetch-Mode to cors; use raw HTTP for browser navigation metadata.
+  const navigate = (path, headers) => new Promise((resolve, reject) => {
+    httpGet(base + path, { headers }, response => {
+      let content = '';
+      response.setEncoding('utf8');
+      response.on('data', chunk => { content += chunk; });
+      response.on('end', () => resolve({ status: response.statusCode, headers: new Headers(response.headers), text: async () => content }));
+      response.on('error', reject);
+    }).on('error', reject);
+  });
+  const navigation = { 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' };
+  const page = await navigate('/', navigation);
+  assert.equal(page.status, 200);
+  assert.match(page.headers.get('content-type'), /text\/html/);
+  assert.match(await page.text(), /PiCall/);
+  for (const path of ['/api/config', '/api/status', '/api/key', '/app.js']) {
+    const response = await navigate(path, navigation);
+    assert.equal(response.status, 403, path);
+  }
+  for (const headers of [
+    { 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'cors', 'sec-fetch-dest': 'empty' },
+    { 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'iframe' },
+    { 'sec-fetch-site': 'cross-site' },
+  ]) assert.equal((await navigate('/', headers)).status, 403);
+  const update = await request('/api/config', { method: 'PUT', body: { maxSessions: 12 }, headers: navigation });
+  assert.equal(update.status, 403);
+  const unrelated = await navigate('/', { ...navigation, host: 'untrusted.example' });
+  assert.equal(unrelated.status, 403);
 });
 
 test('X-Session-Id reuses the Pi process and retains turn state', async (t) => {
