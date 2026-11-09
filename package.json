@@ -1,6 +1,6 @@
 {
   "name": "@yantze/picall",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "A local research agent with web-based model and search configuration and an OpenAI-compatible API",
   "type": "module",
   "bin": { "picall": "bin/picall.js" },
@@ -10,12 +10,12 @@
     "start": "node bin/picall.js",
     "dev": "node --watch bin/picall.js",
     "test": "node --import ./test/isolate.mjs --test test/*.test.js",
-    "check": "node --check bin/picall.js && node --check src/config.js && node --check src/server.js && node --check src/runs.js && node --check src/pi-rpc.js && node --check src/tool-policy.js && node --check src/extension-catalog.js && node --check src/extensions/runtime.mjs && node --check src/extensions/research.mjs && node --check src/web/tools.js && node --check src/web/errors.js && node --check public/app.js"
+    "check": "node --check bin/picall.js && node --check src/config.js && node --check src/server.js && node --check src/durable-runtime.js && node --check src/durable-models.js && node --check src/run-index.js && node --check src/web/tools.js && node --check public/app.js"
   },
   "engines": { "node": ">=22.19.0" },
-  "dependencies": { "@earendil-works/pi-ai": "1.4.0", "@earendil-works/pi-coding-agent": "1.4.0" },
+  "dependencies": { "@earendil-works/pi-ai": "1.5.0", "@earendil-works/pi-durable": "1.5.0", "@earendil-works/pi-schema": "1.5.0", "@earendil-works/chord": "1.5.0" },
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/yantze/picall.git" },
   "bugs": { "url": "https://github.com/yantze/picall/issues" },
-  "keywords": ["pi", "openai", "llm", "agent", "rpc", "mcp"]
+  "keywords": ["pi", "openai", "llm", "agent", "durable", "sqlite", "web-search"]
 }

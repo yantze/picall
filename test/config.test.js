@@ -21,7 +21,7 @@ const httpTool = {
 
 async function storeFor(t) {
   const dataDir = await mkdtemp(join(tmpdir(), 'picall-config-test-'));
-  const store = new ConfigStore({ dataDir, overrides: { workdir: dataDir } });
+  const store = new ConfigStore({ dataDir });
   await store.load();
   t.after(() => rm(dataDir, { recursive: true, force: true }));
   return store;
@@ -44,7 +44,7 @@ test('all seven keys are write-only in public config, omitted updates retain the
   }
   await store.update({ requestTimeoutSeconds: 120 });
   for (const [field, key] of Object.entries(secrets)) assert.equal(store.value[field], key);
-  const reloaded = new ConfigStore({ dataDir: store.dataDir, overrides: { workdir: store.dataDir } });
+  const reloaded = new ConfigStore({ dataDir: store.dataDir });
   await reloaded.load();
   for (const [field, key] of Object.entries(secrets)) assert.equal(reloaded.value[field], key);
   if (process.platform !== 'win32') assert.equal((await stat(store.path)).mode & 0o777, 0o600);
@@ -84,7 +84,7 @@ test('gateway, research and custom HTTP configuration survives restart without a
     httpTools: [httpTool],
   };
   await store.update(patch);
-  const reloaded = new ConfigStore({ dataDir: store.dataDir, overrides: { workdir: store.dataDir } });
+  const reloaded = new ConfigStore({ dataDir: store.dataDir });
   await reloaded.load();
   for (const [field, value] of Object.entries(patch)) assert.deepEqual(reloaded.value[field], value);
   assert.equal(reloaded.public().modelApiKeyConfigured, true);
@@ -155,11 +155,13 @@ test('old config gains local gateway defaults on load without rewriting an exist
   await writeFile(store.path, original, { mode: 0o600 });
   await store.load();
   assert.equal(await readFile(store.path, 'utf8'), original);
+  assert.equal(await readFile(join(store.dataDir, 'config.v0.7.backup.json'), 'utf8'), original);
+  assert.equal(store.value.configVersion, 2);
   assert.equal(store.value.apiKey, legacy.apiKey);
   assert.equal(store.public().apiKeyConfigured, true);
   assert.equal(store.value.modelBaseUrl, 'https://api.deepseek.com/v1');
   assert.equal(store.value.defaultModel, 'deepseek-flash');
   assert.equal(store.value.maxToolRounds, 8);
   assert.equal(store.value.enableResearch, true);
-  for (const field of ['model', 'effort', 'contextWindow']) assert.equal(Object.hasOwn(store.value, field), false);
+  for (const field of ['model', 'effort', 'contextWindow', 'workdir', 'enableSkills', 'projectTrust']) assert.equal(Object.hasOwn(store.value, field), false);
 });

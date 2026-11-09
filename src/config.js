@@ -1,17 +1,15 @@
 import { mkdir, readFile, writeFile, rename, chmod } from 'node:fs/promises';
-import { resolve, join, isAbsolute } from 'node:path';
+import { resolve, join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 
 export const EFFORTS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
-export const PROJECT_TRUST = ['default', 'allow', 'deny'];
 export const DEFAULT_ADDITIONAL_SYSTEM_PROMPT = '按问题复杂度使用工具：简单事实优先一次搜索和一个权威来源，证据充分后立即回答；复杂研究按需补查。';
 export const SECRET_FIELDS = ['apiKey', 'modelApiKey', 'braveApiKey', 'tavilyApiKey', 'tinyfishApiKey', 'exaApiKey', 'jinaApiKey'];
 export const DEFAULTS = Object.freeze({
   host: '127.0.0.1', port: 8787,
-  apiKey: '', workdir: process.cwd(), maxSessions: 8, idleTimeoutMinutes: 30,
-  requestTimeoutSeconds: 300, projectTrust: 'default', saveSessions: false, enableSkills: false,
-  toolOverrides: Object.freeze({}), enableExtensions: true, extensionOverrides: Object.freeze({}),
+  configVersion: 2, apiKey: '', maxSessions: 8, idleTimeoutMinutes: 30,
+  requestTimeoutSeconds: 300, toolOverrides: Object.freeze({}),
   additionalSystemPrompt: DEFAULT_ADDITIONAL_SYSTEM_PROMPT,
   modelBaseUrl: 'https://api.deepseek.com/v1', modelApiKey: '', defaultModel: 'deepseek-flash',
   modelContextWindow: 131072, modelMaxTokens: 8192,
@@ -32,7 +30,7 @@ function validateOverrides(value, field, validName, maxBytes) {
 }
 
 const normalizedConfig = value => ({ ...value,
-  toolOverrides: canonicalOverrides(value.toolOverrides), extensionOverrides: canonicalOverrides(value.extensionOverrides) });
+  toolOverrides: canonicalOverrides(value.toolOverrides) });
 
 export function appError(message, status = 400, code = 'invalid_request', param = null) {
   return Object.assign(new Error(message), { status, code, param });
@@ -48,18 +46,11 @@ function validate(values) {
   for (const [key, min, max] of [['port', 1, 65535], ['maxSessions', 1, 64], ['idleTimeoutMinutes', 1, 1440], ['requestTimeoutSeconds', 5, 3600]]) {
     if (!Number.isInteger(values[key]) || values[key] < min || values[key] > max) throw appError(`${key} must be an integer between ${min} and ${max}.`);
   }
-  if (!PROJECT_TRUST.includes(values.projectTrust)) throw appError('projectTrust must be default, allow, or deny.');
-  if (typeof values.saveSessions !== 'boolean') throw appError('saveSessions must be a boolean.');
-  if (typeof values.enableSkills !== 'boolean') throw appError('enableSkills must be a boolean.');
-  if (typeof values.enableExtensions !== 'boolean') throw appError('enableExtensions must be a boolean.');
   if (typeof values.additionalSystemPrompt !== 'string' || values.additionalSystemPrompt.length > 16384 || values.additionalSystemPrompt.includes('\0')) {
     throw appError('additionalSystemPrompt must be a string of at most 16384 characters without NUL characters.');
   }
   validateOverrides(values.toolOverrides, 'toolOverrides', name => /^[A-Za-z0-9_.:-]{1,256}$/.test(name), 32 * 1024);
-  validateOverrides(values.extensionOverrides, 'extensionOverrides', name => name.length <= 4096 && !/[\u0000-\u001f\u007f]/.test(name) &&
-    (isAbsolute(name) || /^builtin:[A-Za-z0-9_.-]+$/.test(name)), 128 * 1024);
   if (typeof values.apiKey !== 'string' || (values.apiKey && (!/^[\x21-\x7e]{8,256}$/.test(values.apiKey)))) throw appError('API key must contain 8–256 visible ASCII characters (or be empty to disable authentication).');
-  if (typeof values.workdir !== 'string' || !isAbsolute(values.workdir)) throw appError('workdir must be an absolute path.');
   for (const field of ['modelBaseUrl', 'braveBaseUrl', 'tavilyBaseUrl']) {
     let url;
     try { url = new URL(values[field]); } catch { throw appError(`${field} must be an HTTP(S) URL.`); }
@@ -97,13 +88,18 @@ export class ConfigStore {
   }
   async load() {
     await mkdir(this.dataDir, { recursive: true, mode: 0o700 });
-    let saved = {};
-    try { saved = JSON.parse(await readFile(this.path, 'utf8')); }
+    let saved = {}, original;
+    try { original = await readFile(this.path, 'utf8'); saved = JSON.parse(original); }
     catch (error) { if (error.code !== 'ENOENT') throw new Error(`Cannot read configuration ${this.path}: ${error.message}`); }
     if (!saved || typeof saved !== 'object' || Array.isArray(saved)) throw new Error('Saved configuration must be a JSON object.');
-    // Remove legacy gateway model defaults without changing other settings.
-    const { model: _model, effort: _effort, contextWindow: _contextWindow, ...gatewaySettings } = saved;
-    this.value = { ...DEFAULTS, ...gatewaySettings, ...this.overrides };
+    const legacy = ['workdir', 'projectTrust', 'saveSessions', 'enableSkills', 'enableExtensions', 'extensionOverrides', 'model', 'effort', 'contextWindow'];
+    if (original && saved.configVersion !== 2) {
+      try { await writeFile(join(this.dataDir, 'config.v0.7.backup.json'), original, { mode: 0o600, flag: 'wx' }); }
+      catch (error) { if (error.code !== 'EEXIST') throw error; }
+    }
+    const gatewaySettings = Object.fromEntries(Object.entries(saved).filter(([key]) => !legacy.includes(key)));
+    if (saved.configVersion > 2) throw new Error('This configuration was written by a newer PiCall version.');
+    this.value = { ...DEFAULTS, ...gatewaySettings, ...this.overrides, configVersion: 2 };
     validate(this.value);
     this.value = normalizedConfig(this.value);
     return this.value;
@@ -121,7 +117,7 @@ export class ConfigStore {
   update(patch) {
     const operation = this.queue.then(async () => {
       if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw appError('Settings must be a JSON object.');
-      const allowed = Object.keys(DEFAULTS).filter(key => !['host', 'port', 'workdir'].includes(key));
+      const allowed = Object.keys(DEFAULTS).filter(key => !['host', 'port', 'configVersion'].includes(key));
       for (const key of Object.keys(patch)) if (!allowed.includes(key)) throw appError(`Setting is read-only or unknown: ${key}`);
       const merged = { ...this.value, ...patch };
       validate(merged);
