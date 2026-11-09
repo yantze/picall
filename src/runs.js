@@ -42,7 +42,7 @@ function safeFailure(reason) {
   };
   const localErrors = new Set(['invalid_request', 'unsupported_content', 'unsupported_parameter', 'unsupported_effort',
     'model_not_found', 'model_unavailable', 'session_history_conflict', 'session_configuration_changed', 'session_busy',
-    'session_expired', 'session_limit', 'runtime_closed', 'output_limit']);
+    'session_expired', 'session_limit', 'runtime_closed', 'output_limit', 'pi_exited']);
   const message = localErrors.has(code) && typeof reason?.message === 'string'
     ? reason.message.replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 1024)
     : messages[code] || 'The task failed. Check the local operational logs.';

@@ -261,6 +261,7 @@ function renderCapabilities() {
     const input = document.createElement('input'); input.type = 'checkbox';
     input.id = `cap-extension-${index}`; input.dataset.extensionId = extension.id;
     input.checked = overrideValue(state.extensionOverrides, extension.id, extension.configuredEnabled);
+    if (extension.autoDisabled) { input.checked = false; input.disabled = true; }
     input.setAttribute('aria-label', `加载扩展 ${extension.name || extension.id}`);
     input.addEventListener('change', () => { state.extensionOverrides[extension.id] = input.checked; });
     const body = document.createElement('div'); body.className = 'capability-body';
@@ -268,14 +269,20 @@ function renderCapabilities() {
     const label = document.createElement('label'); label.htmlFor = input.id;
     const name = document.createElement('code'); name.textContent = extension.name || extension.id; label.append(name);
     const badge = document.createElement('span'); badge.className = 'capability-badge';
-    badge.textContent = `Pi 原配置：${extension.configuredEnabled ? '启用' : '关闭'}`;
+    badge.textContent = extension.autoDisabled ? '工具重名 · 自动禁用' : `Pi 原配置：${extension.configuredEnabled ? '启用' : '关闭'}`;
     heading.append(label, badge);
     const path = document.createElement('p'); path.className = 'capability-path';
     path.textContent = typeof extension.path === 'string' ? extension.path : extension.id;
     const metadata = document.createElement('p'); metadata.className = 'capability-metadata';
     const origin = [extension.scope, extension.origin].filter((value) => typeof value === 'string' && value).join(' · ');
     metadata.textContent = `${origin ? `${origin} · ` : ''}探测策略：${extension.enabled ? '启用' : '关闭'}`;
-    body.append(heading, path, metadata); row.append(input, body); extensions.append(row);
+    body.append(heading, path, metadata);
+    if (extension.autoDisabled) {
+      const reason = document.createElement('p'); reason.className = 'capability-reason';
+      reason.textContent = `${extension.blockedReason || '扩展工具与内置工具重名，已自动禁用。'} 修改扩展工具名后重启服务，或关闭内置研究工具并保存后新建会话。`;
+      body.append(reason);
+    }
+    row.append(input, body); extensions.append(row);
   }
   if (!extensions.childNodes.length) extensions.append(capabilityEmpty(state.capabilityExtensions ? '未发现可管理的扩展。' : state.capabilityError ? '扩展信息暂不可用，已保存的扩展选择仍保留。' : '正在读取扩展清单…'));
   $('capability-extension-list').replaceChildren(extensions);

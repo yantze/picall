@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { mkdtemp, mkdir, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PiRuntime } from '../src/pi-rpc.js';
@@ -127,6 +127,55 @@ test('web configuration drives real Pi provider and built-in research with exter
     assert.ok(!auth.includes('!literal-fixture-key') && !auth.includes('brave-fixture-key'),
       'Pi may create its empty credential store, but managed credentials must not be copied into it');
   }
+});
+
+test('real Pi startup quarantines dynamically registered conflicts, preserves healthy extensions and reports UI diagnostics', { timeout: 60_000 }, async t => {
+  const f = await fixture(t, { enableExtensions: true });
+  const directory = join(f.profile, 'extensions');
+  await mkdir(directory);
+  const conflict = join(directory, 'collision.js');
+  const healthy = join(directory, 'healthy.js');
+  const source = `export default function(pi) {
+    console.error('PRIVATE_STDERR_CANARY !literal-fixture-key');
+    for (const suffix of ['search', 'lookup']) {
+      const name = suffix === 'search' ? 'web_' + suffix : 'research_' + suffix;
+      pi.registerTool({name,label:name,description:'External fixture',parameters:{type:'object',properties:{}},
+        async execute(){return {content:[{type:'text',text:'EXTERNAL_RESULT_MUST_NOT_RUN'}]};}});
+    }
+  }`;
+  await writeFile(conflict, source);
+  await writeFile(healthy, `export default function(pi) {
+    pi.registerTool({name:'safe_lookup',label:'Safe',description:'Healthy extension',parameters:{type:'object',properties:{}},
+      async execute(){return {content:[{type:'text',text:'safe'}]};}});
+  }`);
+  const logs = [];
+  f.runtime.logger = { log: (level, message, details) => logs.push({ level, message, details }) };
+  const status = await f.runtime.check();
+  assert.equal(status.available, true, status.error);
+  assert.ok(status.tools.includes('web_search'));
+  assert.ok(status.tools.includes('safe_lookup'));
+  assert.equal(f.calls.length, 0, 'startup preflight must not submit a model request');
+  const ui = await f.runtime.capabilities();
+  const entry = ui.extensions.find(item => item.path === conflict);
+  assert.equal(entry.autoDisabled, true);
+  assert.equal(entry.enabled, false);
+  assert.equal(entry.configuredEnabled, true);
+  assert.deepEqual(new Set(entry.conflictingTools), new Set(['web_search', 'research_lookup']));
+  assert.ok(ui.extensions.find(item => item.path === healthy).enabled);
+  assert.ok(logs.some(item => item.details?.diagnostics?.some(message => message.includes('web_search'))));
+  const exits = logs.filter(item => item.message === 'Pi process exited.').length;
+  const session = await f.runtime.acquire({ model: 'picall/local-model' });
+  assert.equal((await session.run('Research with built-in tools.')).text, 'The final verified answer is 42.');
+  assert.equal(f.search, 1);
+  assert.equal(f.reads, 1);
+  assert.equal(logs.filter(item => item.message === 'Pi process exited.').length, exits, 'known conflicts are excluded from subsequent workers');
+  assert.equal(await readFile(conflict, 'utf8'), source, 'never modify user extension files');
+  assert.ok(!JSON.stringify(logs).includes('PRIVATE_STDERR_CANARY'));
+  assert.ok(!JSON.stringify(logs).includes('!literal-fixture-key'));
+  f.config.enableResearch = false;
+  const recovered = await f.runtime.capabilities();
+  assert.equal(recovered.extensions.find(item => item.path === conflict).autoDisabled, undefined);
+  assert.equal(recovered.extensions.find(item => item.path === conflict).enabled, true);
 });
 
 test('search and provider configuration changes invalidate existing session identity and model probes', { timeout: 60_000 }, async t => {

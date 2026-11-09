@@ -6,9 +6,11 @@ import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { getSupportedThinkingLevels } from '@earendil-works/pi-ai/compat';
-import { canonicalOverrides, DEFAULT_ADDITIONAL_SYSTEM_PROMPT } from './config.js';
+import { canonicalOverrides, DEFAULT_ADDITIONAL_SYSTEM_PROMPT, SECRET_FIELDS } from './config.js';
 import { discoverExtensions } from './extension-catalog.js';
 import { toolPolicy } from './tool-policy.js';
+import { startupConflicts } from './startup-diagnostics.js';
+import { createResearchTools } from './web/tools.js';
 
 const extensionPath = fileURLToPath(new URL('./extensions/runtime.mjs', import.meta.url));
 const MAX_RECORD_BYTES = 16 * 1024 * 1024;
@@ -65,7 +67,7 @@ function bundledCommand() {
 }
 
 class RpcWorker extends EventEmitter {
-  constructor(command, { cwd, model, effort, systemPrompt, additionalSystemPrompt = DEFAULT_ADDITIONAL_SYSTEM_PROMPT, projectTrust, saveSessions = false, enableSkills = false, toolOverrides = {}, selectedExtensions, managedConfig = {}, logger }) {
+  constructor(command, { cwd, model, effort, systemPrompt, additionalSystemPrompt = DEFAULT_ADDITIONAL_SYSTEM_PROMPT, projectTrust, saveSessions = false, enableSkills = false, toolOverrides = {}, selectedExtensions, managedConfig = {}, diagnosticSecrets = [], logger }) {
     super();
     this.pending = new Map();
     this.sequence = 0;
@@ -99,14 +101,18 @@ class RpcWorker extends EventEmitter {
     this.child.stdout.setEncoding('utf8');
     this.child.stderr.setEncoding('utf8');
     this.child.stdout.on('data', (chunk) => this.onData(chunk));
-    this.child.stderr.on('data', (chunk) => { this.stderr = (this.stderr + chunk).slice(-4000); });
-    this.child.stdin.on('error', (error) => this.fail(failure(`Pi RPC input closed: ${error.message}`)));
+    this.child.stderr.on('data', (chunk) => { this.stderr = (this.stderr + chunk).slice(-65536); });
+    this.child.stdin.on('error', (error) => {
+      if (error.code !== 'EPIPE' && error.code !== 'ERR_STREAM_DESTROYED') this.fail(failure('Pi RPC input closed.'));
+    });
     this.child.on('error', (error) => this.fail(failure(`Could not start Pi: ${error.message}`, 503, 'pi_unavailable')));
-    this.child.on('exit', (code, signal) => {
-      // Extension/provider stderr can contain credentials and prompt payloads.
-      // Keep it out of both API errors and ordinary application logs.
-      if (!this.closed) this.logger?.log('error', 'Pi process exited.', { exitCode: code, signal });
-      this.fail(failure(`Pi exited (${signal || code}). Check Pi's provider and extension configuration.`, 502, 'pi_exited'));
+    this.child.on('close', (code, signal) => {
+      // close follows stderr drain; exit may fire before its final diagnostic.
+      const secrets = [...diagnosticSecrets, ...Object.entries({ ...managedConfig, ...process.env }).filter(([key]) => /key|token|secret|password|bearer|authorization|cookie/i.test(key)).map(([, value]) => value)].filter(value => typeof value === 'string' && value);
+      this.startupConflicts = startupConflicts(this.stderr, secrets);
+      const diagnostics = this.startupConflicts.map(item => item.message);
+      if (!this.closed) this.logger?.log('error', 'Pi process exited.', { exitCode: code, signal, ...(diagnostics.length ? { diagnostics } : {}) });
+      this.fail(failure(`Pi exited (${signal || code}). ${diagnostics.join(' ') || "Check Pi's provider and extension configuration."}`, 502, 'pi_exited'));
     });
     this.logger = logger;
   }
@@ -251,6 +257,7 @@ export class PiRuntime {
     this.workers = new Set();
     this.probeQueue = Promise.resolve();
     this.closed = false;
+    this.blockedExtensions = new Map();
     this.housekeeping = setInterval(() => { void this.reap(); }, 60_000);
     this.housekeeping.unref();
   }
@@ -303,22 +310,53 @@ export class PiRuntime {
   async createWorker(options) {
     const config = this.getConfig();
     const settings = { ...config, ...options };
-    let selectedExtensions;
-    if (settings.enableExtensions === false) selectedExtensions = [];
-    else if (Object.keys(settings.extensionOverrides || {}).length) {
-      selectedExtensions = (await this.extensions(settings)).filter(extension => extension.enabled).map(extension => extension.path);
+    const selected = settings.enableExtensions === false ? [] : (await this.extensions(settings)).filter(extension => extension.enabled).map(extension => extension.path);
+    const reserved = new Set(settings.enableResearch === true ? createResearchTools(settings).tools.map(tool => tool.name) : []);
+    for (let attempt = 0; ; attempt++) {
+      if (this.closed) throw failure('Pi runtime is shutting down.', 503, 'runtime_closed');
+      const selectedExtensions = selected.filter(path => !this.blocked(settings).has(path));
+      const worker = new RpcWorker(this.getCommand(), { cwd: config.workdir || process.cwd(), projectTrust: config.projectTrust || 'default',
+        enableSkills: config.enableSkills === true, toolOverrides: config.toolOverrides || {}, additionalSystemPrompt: config.additionalSystemPrompt ?? DEFAULT_ADDITIONAL_SYSTEM_PROMPT,
+        logger: this.logger, ...options, selectedExtensions, managedConfig: localConfig(settings), diagnosticSecrets: SECRET_FIELDS.map(key => config[key]) });
+      this.workers.add(worker);
+      worker.once('failure', () => this.workers.delete(worker));
+      try {
+        await worker.send({ type: 'get_state' });
+        if (this.closed) throw failure('Pi runtime is shutting down.', 503, 'runtime_closed');
+        return worker;
+      } catch (error) {
+        await worker.close();
+        let quarantined = false;
+        for (const conflict of worker.startupConflicts || []) {
+          if (!reserved.has(conflict.tool)) continue;
+          const path = conflict.owner === extensionPath ? conflict.source : conflict.source === extensionPath ? conflict.owner : undefined;
+          if (!selectedExtensions.includes(path)) continue;
+          const tools = [...new Set([...(this.blocked(settings).get(path)?.conflictingTools || []), conflict.tool])];
+          this.blocked(settings).set(path, { conflictingTools: tools, blockedReason: `与 PiCall 内置工具 ${tools.join('、')} 重名，已自动禁用此扩展。` });
+          quarantined = true;
+          this.logger?.log('warn', 'Disabled extension conflicting with PiCall tools.', { tool: conflict.tool });
+        }
+        if (!quarantined || attempt >= 7 || this.closed) throw error;
+      }
     }
-    if (this.closed) throw failure('Pi runtime is shutting down.', 503, 'runtime_closed');
-    const worker = new RpcWorker(this.getCommand(), { cwd: config.workdir || process.cwd(), projectTrust: config.projectTrust || 'default',
-      enableSkills: config.enableSkills === true, toolOverrides: config.toolOverrides || {}, additionalSystemPrompt: config.additionalSystemPrompt ?? DEFAULT_ADDITIONAL_SYSTEM_PROMPT,
-      logger: this.logger, ...options, selectedExtensions, managedConfig: localConfig(settings) });
-    this.workers.add(worker);
-    worker.once('failure', () => this.workers.delete(worker));
-    return worker;
+  }
+
+  blocked(config = this.getConfig()) {
+    const key = JSON.stringify({ context: runtimeContext(config.workdir || process.cwd(), this.command),
+      managed: localConfigKey(config), projectTrust: config.projectTrust, enableExtensions: config.enableExtensions,
+      overrides: canonicalOverrides(config.extensionOverrides || {}) });
+    if (!this.blockedExtensions.has(key)) {
+      if (this.blockedExtensions.size >= 16) this.blockedExtensions.delete(this.blockedExtensions.keys().next().value);
+      this.blockedExtensions.set(key, new Map());
+    }
+    return this.blockedExtensions.get(key);
   }
 
   async extensions(config = this.getConfig()) {
-    try { return await discoverExtensions({ ...config, workdir: config.workdir || process.cwd() }); }
+    try { return (await discoverExtensions({ ...config, workdir: config.workdir || process.cwd() })).map(extension => {
+      const blocked = this.blocked(config).get(extension.path);
+      return blocked ? { ...extension, ...blocked, enabled: false, autoDisabled: true } : extension;
+    }); }
     catch { throw failure('Could not discover configured Pi extensions. Check Pi package and project configuration.', 503, 'extension_discovery_failed'); }
   }
 
@@ -331,7 +369,11 @@ export class PiRuntime {
     }));
     const errors = [probe.status === 'rejected' || !snapshot?.available ? snapshot?.error || 'Pi tool discovery is unavailable.' : null,
       extensions.status === 'rejected' ? 'Pi extension discovery is unavailable.' : null].filter(Boolean);
-    return { tools, extensions: extensions.status === 'fulfilled' ? extensions.value : [], ...(errors.length ? { error: errors.join(' ') } : {}) };
+    const entries = extensions.status === 'fulfilled' ? extensions.value.map(extension => {
+      const blocked = this.blocked(config).get(extension.path);
+      return blocked ? { ...extension, ...blocked, enabled: false, autoDisabled: true } : extension;
+    }) : [];
+    return { tools, extensions: entries, ...(errors.length ? { error: errors.join(' ') } : {}) };
   }
 
   async models() {

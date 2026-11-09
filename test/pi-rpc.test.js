@@ -51,6 +51,25 @@ test('model failures produce errors rather than successful empty completions', a
   assert.deepEqual(runtime.list(), []);
 });
 
+test('a startup exit exposes only allowlisted diagnostics and never retries unrelated conflicts', async t => {
+  const logs = [];
+  const script = `console.error('PRIVATE_PROMPT_CANARY ' + process.env.PICALL_MODEL_API_KEY);
+    console.error('Error: Tool "web_search" conflicts with https://secret.example/?key=DO_NOT_EXPOSE');
+    console.error('Error: Tool "PRIVATE_LOCAL_API_CANARY" conflicts with registered extension');
+    process.exit(1);`;
+  const runtime = createRuntime(t, { modelApiKey: 'PRIVATE_MODEL_CANARY', apiKey: 'PRIVATE_LOCAL_API_CANARY' }, {
+    logger: { log: (level, message, details) => logs.push({ level, message, details }) },
+    command: { file: process.execPath, args: ['-e', script, '--'] },
+  });
+  const status = await runtime.check();
+  assert.equal(status.available, false);
+  assert.ok(status.error.includes('Tool "web_search" conflicts'));
+  assert.equal(logs.filter(item => item.message === 'Pi process exited.').length, 1);
+  const exposed = JSON.stringify({ status, logs });
+  for (const value of ['PRIVATE_PROMPT_CANARY', 'PRIVATE_MODEL_CANARY', 'PRIVATE_LOCAL_API_CANARY', 'DO_NOT_EXPOSE', 'https://secret.example']) assert.ok(!exposed.includes(value));
+  assert.deepEqual((await runtime.extensions()).filter(entry => entry.autoDisabled), []);
+});
+
 test('capacity rejects busy sessions, evicts idle sessions and preserves expired-session identity', async (t) => {
   const runtime = createRuntime(t, { maxSessions: 1 });
   const session = await runtime.acquire({ sessionId: 'retained' });
