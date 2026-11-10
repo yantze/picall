@@ -1,8 +1,8 @@
-# PiCall · 本地 Durable Agent Search
+# PiCall · 本地与 Cloudflare 研究 Agent
 
-在本机通过网页配置模型、搜索服务和只读 HTTP 工具，再用 OpenAI 兼容 API 发起研究任务。执行层直接使用 **Pi Durable 1.5.0 + 本地 SQLite**；任务在进程重启后按检查点恢复。
+通过网页配置模型、搜索服务和只读 HTTP 工具，再用 OpenAI 兼容 API 发起研究任务。本地使用 **Pi Durable 1.5.0 + SQLite**，Cloudflare 使用 **PiHarness + Lifecycle + Durable Object SQLite**；任务按检查点恢复。
 
-`main` 是本地版；[`Cloudflare` 分支](https://github.com/yantze/picall/tree/Cloudflare)保留独立的 Workers / PiHarness 版本。本地版不依赖 Cloudflare 账号，也不加载 Coding Agent、外部 Pi 插件、MCP、Skills、文件或命令工具。
+日常开发集中在 `main`：`apps/local` 和 `apps/cloudflare` 分别提供部署入口，共用 `packages/core`、`packages/tools`、`packages/ui`。原 [`Cloudflare` 分支](https://github.com/yantze/picall/tree/Cloudflare)保留历史发布基线。本轮整合不部署线上 Worker；两端的配置、会话和任务仍独立保存，不自动同步。本地不依赖 Cloudflare 账号，也不加载 Coding Agent、外部 Pi 插件、MCP、Skills、文件或命令工具。
 
 ## 启动与配置
 
@@ -29,7 +29,22 @@ npm start
 npm start -- --port 8788 --data-dir /absolute/path/to/picall-data
 ```
 
-## API
+## Cloudflare 网页配置与部署
+
+```bash
+npm run dev:cloudflare
+npm run build:cloudflare
+```
+
+Worker 配置位于 `apps/cloudflare/wrangler.jsonc`，共用页面通过 Workers Assets 提供。云端管理使用独立 `ADMIN_TOKEN` 登录，Cookie 有效期 8 小时，采用 HttpOnly、Secure、SameSite=Strict；研究 API 的 Bearer 与管理登录分离。网页试运行和查询走管理接口，无需在页面填写研究 API 的 Bearer。
+
+云端默认保留 AI Gateway `deepseek` 和 DeepSeek BYOK，也可在网页选择 Workers AI 或 OpenAI 兼容网关。兼容网关可填写 Base URL 与字面值 API Key；Gateway BYOK 仍由 Cloudflare 托管，不回读到网页。
+
+新增 Management DO 使用 AES-256-GCM 加密保存配置，主密钥来自 `CONFIG_ENCRYPTION_KEY` Worker Secret，要求 32 字节随机值的 Base64 编码。首次初始化导入既有 vars/secrets；之后网页配置为准，清除密钥不回落旧环境值。配置查询脱敏，revision 冲突返回 409，解密失败不静默重置。
+
+现有 Worker、SearchSession/RequestKey 类名、SESSIONS/KEYS 绑定、DO 命名算法与 v1 迁移均保留，只追加 v2 创建 Management。首次升级需准备新 Secrets 并排空旧任务，见 [部署说明](docs/DEPLOYMENT.md)。两条验证流水线跟随 main；发布仅由手动工作流触发，本轮不修改线上 Git 集成。
+
+## 共用 API
 
 ```bash
 curl http://127.0.0.1:8787/v1/chat/completions \
@@ -40,6 +55,8 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 ```
 
 未启用本地接口鉴权时可省略 Authorization。
+
+云端必须使用 Bearer。两端任务状态统一为 `pending`、`running`、`completed`、`failed`、`cancelled`；字段为 `sessionId`、`createdAt`、`updatedAt`、`completion`、`error`、`usage`、`elapsed_ms` 和 `service_calls`。时间戳字段使用毫秒，OpenAI completion 的 created 仍为秒。
 
 | 接口 | 行为 |
 | --- | --- |
@@ -65,7 +82,7 @@ JSON 和 SSE 的正文**只包含确认完成的最终答案**。SSE 执行期�
 - 默认 8 个工具轮次，映射 Durable `maxTurns`：第 8 轮工具运行后仍无最终答案就失败，不自动追加新 run 绕过限制。
 - 默认期限为受理后 300 秒；重启和重试不会重置。恢复前先处理过期、取消和配置变化，再 resume。
 - 瞬时模型错误由 Durable 最多额外重试 2 次；适配层不叠加重试。连续崩溃保护为 5 次。
-- 默认最多并发 8 个会话。闲置 30 分钟释放句柄，SQLite 会话仍可重新打开；任务结果及幂等记录保留 7 天，完整会话数据库在不活跃 7 天且无运行任务后清理。
+- 本地默认最多并发 8 个会话，闲置 30 分钟释放句柄，SQLite 会话仍可重新打开。云端每会话独立 DO，不增加跨 DO 的全局槽位锁。两端结果及幂等记录保留 7 天，完整会话数据库在不活跃 7 天且无运行任务后清理。
 - 正常关闭会停止受理并刷盘。进程重新启动才会恢复；SQLite 不会自动拉起程序，需要时使用自己的进程服务管理器。
 
 每个会话一个 SQLite 文件，全局索引也是 SQLite。索引先保存固定 run/session ID 和待提交输入，再在 Durable commit 中保存应用元数据并以 `requestId=runId` 提交，最后确认索引后返回受理。索引与会话库之间的中断通过恢复记录和持久 requestId 去重修复，不依赖内存 Promise。
@@ -98,6 +115,10 @@ usage 累计整个任务的模型用量，包括缓存 token 和已记录的失�
 
 ## 从 0.7 升级与回滚
 
+从本地 0.8 升级只需停止旧进程、更新 main、运行 npm ci 和 npm start，原数据目录、SQLite 文件及应用文档标识不变。Pi 四个包仍精确固定 1.5.0，Agents SDK 为 0.33.0。
+
+旧云端完成结果、幂等映射和历史按原算法兼容读取；旧未完成任务标记 process_interrupted。客户端需适配 accepted→pending、succeeded→completed、session_id→sessionId、created_at→createdAt，以及 picall/<id> 模型目录。旧 completion 的 ID、正文和用量不改写。云端首次切换、Secrets 和存储限制见部署说明。
+
 停止旧进程后更新 main，运行 `npm ci`、`npm start`。旧配置首次加载时保留一份 `config.v0.7.backup.json`，模型、搜索及本地访问密钥保留；配置版本升级为 2，原生 Pi 选项不再生效。
 
 旧 `runs/*.json` 只读导入索引，保留结果、ID 和幂等映射，原文件不修改。旧未完成任务没有 Durable 检查点，标记 process_interrupted，不自动重跑。旧 Pi 会话不能转换，续接返回 session_expired，需新会话。迁移有版本标记并以事务提交，中断后再次启动不会重复导入。
@@ -112,7 +133,9 @@ usage 累计整个任务的模型用量，包括缓存 token 和已记录的失�
 npm ci
 npm run check
 npm test
-npm pack --dry-run
+npm run test:browser
+npm run test:package
+npm run build:cloudflare
 ```
 
-测试使用真实 Pi Durable 与 SQLite，模型和搜索上游为本机模拟服务，包括 SIGKILL 恢复测试；浏览器和真实第三方联调的边界见 [VALIDATION.md](VALIDATION.md)。
+测试使用真实 Pi Durable、SQLite 与 workerd，模型和搜索上游为模拟服务，包括 SIGKILL 恢复、旧格式升级、管理加密和共用浏览器流程。独立 npm tarball 安装验证本地包不带入 Cloudflare 运行依赖；不发布 npm 包。架构边界见 [架构说明](docs/ARCHITECTURE.md)，验证与真实联调边界见 [VALIDATION.md](VALIDATION.md)。

@@ -1,21 +1,71 @@
 {
   "name": "@yantze/picall",
-  "version": "0.8.0",
-  "description": "A local research agent with web-based model and search configuration and an OpenAI-compatible API",
+  "version": "0.9.0",
+  "description": "Shared research agent for local Node.js and Cloudflare Workers",
   "type": "module",
-  "bin": { "picall": "bin/picall.js" },
-  "exports": { ".": "./src/server.js" },
-  "files": ["bin", "src", "public", "README.md", "VALIDATION.md", "LICENSE", "THIRD_PARTY.md"],
+  "bin": {
+    "picall": "bin/picall.js"
+  },
+  "exports": {
+    ".": "./apps/local/src/server.js"
+  },
+  "files": [
+    "bin",
+    "apps/local/src",
+    "packages/core/*.js",
+    "packages/core/*.d.ts",
+    "packages/tools/*.js",
+    "packages/ui",
+    "docs/*.md",
+    "README.md",
+    "VALIDATION.md",
+    "LICENSE",
+    "THIRD_PARTY.md"
+  ],
   "scripts": {
     "start": "node bin/picall.js",
     "dev": "node --watch bin/picall.js",
-    "test": "node --import ./test/isolate.mjs --test test/*.test.js",
-    "check": "node --check bin/picall.js && node --check src/config.js && node --check src/server.js && node --check src/durable-runtime.js && node --check src/durable-models.js && node --check src/run-index.js && node --check src/web/tools.js && node --check public/app.js"
+    "test": "npm run test:tools && npm run test:local && npm run test:cloudflare",
+    "check": "npm run check:local && npm run check --workspace apps/cloudflare",
+    "test:local": "node --import ./apps/local/test/isolate.mjs --test apps/local/test/*.test.js",
+    "test:cloudflare": "npm test --workspace apps/cloudflare",
+    "check:local": "node --check bin/picall.js && node --check apps/local/src/server.js && node --check apps/local/src/durable-runtime.js && node --check packages/ui/app.js",
+    "build:cloudflare": "npm run build --workspace apps/cloudflare",
+    "dev:cloudflare": "npm run dev --workspace apps/cloudflare",
+    "test:tools": "node --test packages/tools/test/*.test.js",
+    "test:browser": "npm run pretest --workspace apps/cloudflare && node --import tsx test/browser.mjs",
+    "test:package": "node test/package.mjs"
   },
-  "engines": { "node": ">=22.19.0" },
-  "dependencies": { "@earendil-works/pi-ai": "1.5.0", "@earendil-works/pi-durable": "1.5.0", "@earendil-works/pi-schema": "1.5.0", "@earendil-works/chord": "1.5.0" },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "dependencies": {
+    "@earendil-works/chord": "1.5.0",
+    "@earendil-works/pi-ai": "1.5.0",
+    "@earendil-works/pi-durable": "1.5.0",
+    "@earendil-works/pi-schema": "1.5.0"
+  },
   "license": "MIT",
-  "repository": { "type": "git", "url": "git+https://github.com/yantze/picall.git" },
-  "bugs": { "url": "https://github.com/yantze/picall/issues" },
-  "keywords": ["pi", "openai", "llm", "agent", "durable", "sqlite", "web-search"]
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yantze/picall.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yantze/picall/issues"
+  },
+  "keywords": [
+    "pi",
+    "openai",
+    "llm",
+    "agent",
+    "durable",
+    "sqlite",
+    "web-search"
+  ],
+  "workspaces": [
+    "apps/cloudflare"
+  ],
+  "devDependencies": {
+    "playwright": "1.62.1"
+  }
 }

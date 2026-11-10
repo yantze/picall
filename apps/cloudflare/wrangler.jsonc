@@ -1,0 +1,65 @@
+{
+  "name": "picall-agent-search",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-07",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "ai": {
+    "binding": "AI"
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "SESSIONS",
+        "class_name": "SearchSession"
+      },
+      {
+        "name": "KEYS",
+        "class_name": "RequestKey"
+      },
+      {
+        "name": "MANAGEMENT",
+        "class_name": "Management"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "SearchSession",
+        "RequestKey"
+      ]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": [
+        "Management"
+      ]
+    }
+  ],
+  "vars": {
+    "MODEL": "deepseek-flash",
+    "AI_GATEWAY_ID": "deepseek",
+    "BRAVE_BASE_URL": "https://brave.vastiny.com/res/v1",
+    "TAVILY_BASE_URL": "https://tavily.vastiny.com",
+    "HTTP_TOOLS": "[]"
+  },
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.01
+    }
+  },
+  "assets": {
+    "directory": "../../packages/ui",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  }
+}

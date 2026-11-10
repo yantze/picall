@@ -8,8 +8,12 @@ The local runtime uses `@earendil-works/pi-durable`, `pi-ai`, `pi-schema`, and
 `chord`, pinned to 1.5.0 from [earendil-works/pi](https://github.com/earendil-works/pi),
 licensed under MIT. Their transitive dependencies retain their respective notices.
 SQLite is accessed through Node's built-in module and Pi Durable's official adapter.
-The local package no longer includes `pi-coding-agent` or Cloudflare Agents.
+The published local package does not include `pi-coding-agent` or Cloudflare Agents.
+The Cloudflare workspace additionally uses MIT-licensed `agents` 0.33.0 from
+[cloudflare/agents](https://github.com/cloudflare/agents). Wrangler, Miniflare,
+TypeScript, tsx and Playwright are development and verification dependencies.
 
 The built-in HTTP research tools are adapted from this repository's MIT-licensed
-Cloudflare branch, sharing the search/read contracts and HTTP behavior. The
-Cloudflare branch remains an independent deployment target.
+Cloudflare branch (source commit `0573e12`), with local integration baseline
+`374444e`. Both adapters now share the research implementation on main. The
+original Cloudflare branch remains a historical release reference.

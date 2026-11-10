@@ -1,0 +1,44 @@
+{
+  "name": "picall-mock",
+  "main": "mock-worker.ts",
+  "compatibility_date": "2026-11-07",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "SESSIONS",
+        "class_name": "SearchSession"
+      },
+      {
+        "name": "KEYS",
+        "class_name": "RequestKey"
+      },
+      {
+        "name": "MANAGEMENT",
+        "class_name": "Management"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "SearchSession",
+        "RequestKey"
+      ]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": [
+        "Management"
+      ]
+    }
+  ],
+  "assets": {
+    "directory": "../../../packages/ui",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  }
+}

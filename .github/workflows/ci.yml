@@ -1,4 +1,4 @@
-name: CI
+name: Local research
 on:
   push:
     branches: [main]
@@ -14,7 +14,8 @@ jobs:
         with:
           node-version: '24'
           cache: npm
-      - run: npm ci
-      - run: npm run check
-      - run: npm test
-      - run: npm pack --dry-run
+      - run: npm ci --workspaces=false
+      - run: npm run check:local
+      - run: npm run test:tools
+      - run: npm run test:local
+      - run: npm run test:package

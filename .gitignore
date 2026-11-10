@@ -7,3 +7,11 @@ node_modules/
 coverage/
 *.log
 .DS_Store
+
+.wrangler/
+dist/
+test-dist/
+.dev.vars
+apps/cloudflare/.dev.vars*
+
+test-results/

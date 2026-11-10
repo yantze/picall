@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import { resolve } from 'node:path';
-import { ConfigStore } from '../src/config.js';
-import { Logger } from '../src/logger.js';
-import { DurableRuntime } from '../src/durable-runtime.js';
-import { createApp } from '../src/server.js';
-import { VERSION } from '../src/version.js';
+import { ConfigStore } from '../apps/local/src/config.js';
+import { Logger } from '../apps/local/src/logger.js';
+import { DurableRuntime } from '../apps/local/src/durable-runtime.js';
+import { createApp } from '../apps/local/src/server.js';
+import { VERSION } from '../apps/local/src/version.js';
 
 const usage = `PiCall ${VERSION} — local Pi Durable research API
 
