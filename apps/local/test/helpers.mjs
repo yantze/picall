@@ -12,7 +12,7 @@ export async function mockServices(t) {
   const server = http.createServer(async (req, res) => {
     if (req.url.startsWith('/web/search')) { state.search++; res.writeHead(200, {'content-type':'application/json'}); res.end(JSON.stringify({web:{results:[{title:'Fixture source',url:state.base+'/source',description:'Current reliable source'}]}})); return; }
     if (req.url.startsWith('/reader')) { state.reader++; if(state.readerDelay)await new Promise(resolve=>setTimeout(resolve,state.readerDelay)); if(res.destroyed)return;res.writeHead(200, {'content-type':'text/plain'});if(state.readerBodyDelay){res.flushHeaders();await new Promise(resolve=>setTimeout(resolve,state.readerBodyDelay));} if(!res.destroyed)res.end('Title: Fixture\nMarkdown Content:\nThe verified answer is 42.'); return; }
-    if (req.url.startsWith('/source')) { state.source++; res.writeHead(200, {'content-type':'text/plain'}); res.end('The verified answer is 42.'); return; }
+    if (req.url.startsWith('/source')) { state.source++; if(state.sourceDelay || state.readerDelay)await new Promise(resolve=>setTimeout(resolve,state.sourceDelay || state.readerDelay));if(res.destroyed)return; res.writeHead(200, {'content-type':'text/plain'}); res.end('The verified answer is 42.'); return; }
     if (req.method !== 'POST') { res.writeHead(404); res.end(); return; }
     let raw=''; for await (const chunk of req) raw += chunk;
     const data=JSON.parse(raw); state.requests.push(data);state.authorizations.push(req.headers.authorization);

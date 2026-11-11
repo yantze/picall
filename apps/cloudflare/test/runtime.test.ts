@@ -53,7 +53,7 @@ test(
         'Final answer [source](https://example.com/article)',
       );
       assert.equal(result.usage.total_tokens, 60);
-      assert.deepEqual(result.service_calls, { brave: 2, jina: 2 });
+      assert.deepEqual(result.service_calls, { brave: 2, jina: 2, http: 2 });
       const chat = await req(
         mf,
         '/v1/chat/completions',
@@ -283,7 +283,7 @@ test(
             type: 'fetcher' as const,
             handler: async (request: Request) => {
               outbound++;
-              if (new URL(request.url).hostname === 'r.jina.ai')
+              if (['r.jina.ai', 'example.com'].includes(new URL(request.url).hostname))
                 return new Response('Source body', {
                   headers: { 'Content-Type': 'text/plain' },
                 });
@@ -305,8 +305,8 @@ test(
       ).json();
       const run = await settled(mf, accepted.id);
       assert.equal(run.status, 'completed', JSON.stringify(run));
-      assert.equal(outbound, 4, JSON.stringify(run));
-      assert.deepEqual(run.service_calls, { brave: 2, jina: 2 });
+      assert.equal(outbound, 6, JSON.stringify(run));
+      assert.deepEqual(run.service_calls, { brave: 2, jina: 2, http: 2 });
       const cached: any = await (
         await req(mf, '/v1/runs', { prompt: 'cache exercise' })
       ).json();
@@ -314,10 +314,10 @@ test(
       assert.equal(cachedRun.status, 'completed', JSON.stringify(cachedRun));
       assert.equal(
         outbound,
-        6,
+        9,
         'duplicate search and parallel reads must reuse managed results',
       );
-      assert.deepEqual(cachedRun.service_calls, { brave: 1, jina: 1 });
+      assert.deepEqual(cachedRun.service_calls, { brave: 1, jina: 1, http: 1 });
     } finally {
       await mf.dispose();
       await rm(dir, { recursive: true, force: true });

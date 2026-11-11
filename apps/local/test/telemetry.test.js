@@ -27,7 +27,7 @@ test('baseline disables only reminders, preserves timings and remains compatible
   assert.notEqual(configFingerprint(f.store.value),configFingerprint(old));
 });
 test('provider timing includes the streamed body rather than stopping at response headers',async t=>{
-  const f=await setup(t);f.services.readerBodyDelay=150;
+  const f=await setup(t);f.services.readerBodyDelay=150;f.services.sourceDelay=500;
   const run=await f.runtime.submit(completion('RESEARCH')),done=await f.runtime.wait(run.id);
   const jina=done.timings.providers.jina;
   assert.equal(jina.completed_requests,1);assert.ok(jina.elapsed_ms-jina.headers_ms>=75,JSON.stringify(jina));

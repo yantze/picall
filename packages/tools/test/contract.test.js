@@ -91,7 +91,7 @@ test("missing credential is explicit and abort stops fallback", async () => {
   await assert.rejects(web.search({ query: "q" }, controller.signal));
   assert.equal(calls, 0);
 });
-test("fetch uses Jina then TinyFish with batch markdown contract and persistent find", async () => {
+test("both initial failures immediately start TinyFish with batch markdown contract and persistent find", async () => {
   const calls = [];
   const { web } = setup(async (url, init) => {
     calls.push(url);
@@ -100,6 +100,7 @@ test("fetch uses Jina then TinyFish with batch markdown contract and persistent 
       assert.equal(init.headers.Authorization, "Bearer jina-fixture-key");
       return new Response("", { status: 503 });
     }
+    if (url === "https://example.com/page") return new Response("", { status: 503 });
     assert.equal(init.headers["X-Proxy"], undefined);
     assert.equal(init.headers.Authorization, undefined);
     const body = JSON.parse(init.body);
@@ -113,7 +114,8 @@ test("fetch uses Jina then TinyFish with batch markdown contract and persistent 
   const result = await web.content("https://example.com/page");
   assert.equal(result.provider, "tinyfish_fetch");
   assert.match(calls[0], /r.jina.ai/);
-  assert.match(calls[1], /api.fetch.tinyfish/);
+  assert.equal(calls[1], "https://example.com/page");
+  assert.match(calls[2], /api.fetch.tinyfish/);
   assert.equal(
     (await web.stored({
       content_id: result.content_id,
@@ -123,46 +125,40 @@ test("fetch uses Jina then TinyFish with batch markdown contract and persistent 
     7
   );
 });
-test("a slow Jina body cannot block a complete fallback and only the winner is cached", async t => {
+test("both initial bodies stall: TinyFish starts at 2s, wins, cancels losers and alone is cached", async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
-  const calls = [];
-  let jinaStarted, jinaAborted = false;
-  const ready = new Promise(resolve => { jinaStarted = resolve; });
+  const calls = [], signals = [], observations = [];
+  let started;
+  const ready = new Promise(resolve => { started = resolve; });
   const { web, map } = setup(async (url, init) => {
     calls.push(url);
-    if (String(url).includes('r.jina.ai')) {
-      // Headers can arrive promptly while the actual body stalls.
-      return new Response(new ReadableStream({ start(controller) {
-        init.signal.addEventListener('abort', () => {
-          jinaAborted = true;
-          controller.error(init.signal.reason);
-        }, { once: true });
-        jinaStarted();
-      } }), { headers: { 'Content-Type': 'text/plain' } });
-    }
-    return Response.json({ results: [{ text: 'Complete fallback source' }] });
+    if (String(url).includes('api.fetch.tinyfish')) return Response.json({ results: [{ text: 'Complete fallback source' }] });
+    signals.push(init.signal);
+    return new Response(new ReadableStream({ start(controller) {
+      init.signal.addEventListener('abort', () => controller.error(init.signal.reason), { once: true });
+      if (signals.length === 2) started();
+    } }), { headers: { 'Content-Type': 'text/plain' } });
   });
-  const observations = [];
   web.observe = async (runId, event) => observations.push({ runId, ...event });
   const pending = web.content('https://example.com/slow');
   await ready;
   t.mock.timers.tick(1999);
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 2);
   t.mock.timers.tick(1);
   const result = await pending;
   assert.equal(result.provider, 'tinyfish_fetch');
   assert.equal(result.text, 'Complete fallback source');
-  assert.equal(jinaAborted, true);
+  assert.ok(signals.every(signal => signal.aborted));
   const providers = observations.filter(event => event.event === 'provider_finished');
   assert.deepEqual(providers.map(event => [event.provider, event.success]).sort(),
-    [['jina', false], ['tinyfish_fetch', true]]);
+    [['http', false], ['jina', false], ['tinyfish_fetch', true]]);
   assert.ok(providers.every(event => event.runId === 'run' && event.elapsed_ms >= event.headers_ms));
   assert.equal(observations.filter(event => event.event === 'tool_finished').length, 1);
-  assert.deepEqual(map.get('calls:run'), { jina: 1, tinyfish_fetch: 1 });
+  assert.deepEqual(map.get('calls:run'), { jina: 1, http: 1, tinyfish_fetch: 1 });
   assert.equal([...map.keys()].filter(key => key.startsWith('content:')).length, 1);
   assert.equal((await web.content('https://example.com/slow')).content_id, result.content_id);
   t.mock.timers.tick(10000);
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 3);
 });
 test("a failed speculative fallback leaves the preferred reader able to finish", async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
@@ -176,7 +172,7 @@ test("a failed speculative fallback leaves the preferred reader able to finish",
       assert.equal(init.signal.aborted, false);
       return new Response('Preferred complete source');
     }
-    if (!String(url).includes('api.fetch.tinyfish')) fallbackDone();
+    if (String(url).includes('api.fetch.tinyfish')) fallbackDone();
     return new Response('', { status: 503 });
   });
   const pending = web.content('https://example.com/slow');
@@ -194,7 +190,7 @@ test("cancelling hedged content aborts every active reader and writes no cache",
   const second = new Promise(resolve => { secondStarted = resolve; });
   const { web, map } = setup(async (_url, init) => {
     signals.push(init.signal);
-    if (signals.length === 1) firstStarted(); else secondStarted();
+    if (signals.length === 2) firstStarted(); else if (signals.length === 3) secondStarted();
     await new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true }));
   });
   const observations = [];
@@ -209,45 +205,49 @@ test("cancelling hedged content aborts every active reader and writes no cache",
   // Cancellation unwinds the owned reads; no successful response was observed.
   await new Promise(resolve => setImmediate(resolve));
   const providers = observations.filter(event => event.event === 'provider_finished');
-  assert.equal(providers.length, 2);
+  assert.equal(providers.length, 3);
   assert.ok(providers.every(event => event.runId === 'run' && event.success === false));
   assert.ok(signals.every(signal => signal.aborted));
   t.mock.timers.tick(10000);
-  assert.equal(signals.length, 2);
+  assert.equal(signals.length, 3);
   assert.ok([...map.keys()].every(key => key.startsWith('calls:')));
 });
-test("fast Jina avoids speculative requests; empty reader envelopes require fallback", async t => {
+test("either initial reader wins immediately and cancels its peer without launching TinyFish", async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
-  const fast = setup(async () => new Response('Complete source'));
-  assert.equal((await fast.web.content('https://example.com')).provider, 'jina');
-  t.mock.timers.tick(10000);
-  assert.deepEqual(fast.map.get('calls:run'), { jina: 1 });
-  const empty = setup(async url => String(url).includes('r.jina.ai')
-    ? new Response('Title: An SPA\nURL Source: https://example.com\nMarkdown Content:\n\n')
-    : Response.json({ results: [{ text: 'Rendered article body' }] }));
-  assert.equal((await empty.web.content('https://example.com')).provider, 'tinyfish_fetch');
-});
-test("slow remote readers allow HTTP to finish and missing TinyFish credentials are skipped", async t => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
-  for (const tinyfish of ['configured', undefined]) {
-    let firstStarted, secondStarted;
-    const first = new Promise(resolve => { firstStarted = resolve; });
-    const second = new Promise(resolve => { secondStarted = resolve; });
+  for (const winner of ['jina', 'http']) for (const tinyfish of ['configured', undefined]) {
     const signals = [];
     const { web, map } = setup(async (url, init) => {
-      if (url === 'https://example.com/source') return new Response('Direct source body');
+      const provider = String(url).includes('r.jina.ai') ? 'jina' : 'http';
+      if (provider === winner) return new Response('Complete source');
       signals.push(init.signal);
-      if (signals.length === 1) firstStarted(); else secondStarted();
       await new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true }));
     }, { TINYFISH_KEY: tinyfish });
-    const pending = web.content('https://example.com/source');
-    await first;
-    t.mock.timers.tick(2000);
-    if (tinyfish) { await second; t.mock.timers.tick(2000); }
-    assert.equal((await pending).provider, 'http');
-    assert.ok(signals.every(signal => signal.aborted));
-    assert.deepEqual(map.get('calls:run'), { jina: 1, ...(tinyfish ? { tinyfish_fetch: 1 } : {}), http: 1 });
+    assert.equal((await web.content('https://example.com')).provider, winner);
+    assert.ok(signals.length === 1 && signals[0].aborted);
+    t.mock.timers.tick(10000);
+    assert.deepEqual(map.get('calls:run'), { jina: 1, http: 1 });
   }
+});
+test("one initial failure keeps the 2s grace period while the other reader remains active", async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const calls = [];
+  let started;
+  const ready = new Promise(resolve => { started = resolve; });
+  const { web } = setup(async (url, init) => {
+    calls.push(url);
+    if (String(url).includes('r.jina.ai')) return new Response('', {status:503});
+    if (String(url).includes('api.fetch.tinyfish')) return Response.json({results:[{text:'Rendered source'}]});
+    started();
+    await new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(init.signal.reason), {once:true}));
+  });
+  const pending = web.content('https://example.com');
+  await ready;
+  await new Promise(resolve => setImmediate(resolve));
+  t.mock.timers.tick(1999);
+  assert.equal(calls.length, 2);
+  t.mock.timers.tick(1);
+  assert.equal((await pending).provider, 'tinyfish_fetch');
+  assert.equal(calls.length, 3);
 });
 test("the run deadline aborts outstanding content attempts and never caches them", async () => {
   const signals = [];
@@ -269,8 +269,8 @@ test("HTTP fallback follows redirects across arbitrary HTTP/HTTPS hosts and reta
   const urls = [];
   const { web } = setup(async (url) => {
     urls.push(url);
-    if (urls.length < 3) return new Response("", { status: 503 });
-    if (urls.length === 3)
+    if (String(url).includes("r.jina.ai")) return new Response("", { status: 503 });
+    if (url === "https://unlisted.example.org/source")
       return new Response("", {
         status: 302,
         headers: { Location: "http://127.0.0.1:8080/redirected" }
@@ -282,7 +282,7 @@ test("HTTP fallback follows redirects across arbitrary HTTP/HTTPS hosts and reta
   const result = await web.content("https://unlisted.example.org/source");
   assert.equal(result.provider, "http");
   assert.equal(result.text, "redirected source");
-  assert.equal(urls[3], "http://127.0.0.1:8080/redirected");
+  assert.equal(urls[2], "http://127.0.0.1:8080/redirected");
   await assert.rejects(
     boundedText(
       new Response("x", {
@@ -373,10 +373,10 @@ test("non-HTTP final URL and unsupported MIME stop fetch fallback", async () => 
     web.content("https://example.com"),
     /unsupported_content_type/
   );
-  assert.equal(calls, 1);
-  const second = setup(async () => {
+  assert.equal(calls, 2);
+  const second = setup(async url => {
     calls++;
-    if (calls === 2) return new Response("", { status: 503 });
+    if (!String(url).includes("api.fetch.tinyfish")) return new Response("", { status: 503 });
     return Response.json({
       results: [
         {
@@ -565,7 +565,7 @@ test("short body previews retain full persisted text for tail lookup after reope
     (await reopened.stored({ content_id: first.content_id, limit: 2e4 })).text.length,
     2e4
   );
-  assert.equal(calls, 1);
+  assert.equal(calls, 2);
 });
 test("duplicate in-flight reads share a request without one cancelled reader cancelling the other", async () => {
   let calls = 0;
@@ -590,7 +590,7 @@ test("duplicate in-flight reads share a request without one cancelled reader can
   await rejected;
   release();
   assert.equal((await two).text, "Shared useful body");
-  assert.equal(calls, 1);
+  assert.equal(calls, 2);
 });
 test("an abandoned shared read stops its network request and cannot cache a failed attempt", async () => {
   let started;
@@ -600,11 +600,11 @@ test("an abandoned shared read stops its network request and cannot cache a fail
   let calls = 0;
   const { web } = setup(async (_url, init) => {
     calls++;
-    if (calls > 1)
+    if (calls > 2)
       return new Response("recovered", {
         headers: { "Content-Type": "text/plain" }
       });
-    started();
+    if (calls === 2) started();
     await new Promise(
       (_, reject) => init.signal?.addEventListener(
         "abort",
@@ -625,7 +625,7 @@ test("an abandoned shared read stops its network request and cannot cache a fail
     (await web.content("https://example.com/retry")).text,
     "recovered"
   );
-  assert.equal(calls, 2);
+  assert.equal(calls, 4);
 });
 test("challenge detection rejects reader errors and challenge pages without rejecting articles about CAPTCHA", async () => {
   const blocked = "Title: Forbidden\nURL Source: https://example.com\nWarning: Target URL returned error 403: Forbidden\nMarkdown Content:\nPlease verify you are human";
@@ -655,15 +655,15 @@ test("challenge detection rejects reader errors and challenge pages without reje
     void 0
   );
   let calls = 0;
-  const { web } = setup(async () => {
+  const { web } = setup(async url => {
     calls++;
-    return calls === 1 ? new Response(blocked) : Response.json({ results: [{ text: "Real weather data" }] });
+    return !String(url).includes("api.fetch.tinyfish") ? new Response(blocked) : Response.json({ results: [{ text: "Real weather data" }] });
   });
   assert.equal(
     (await web.content("https://example.com/weather")).provider,
     "tinyfish_fetch"
   );
-  assert.equal(calls, 2);
+  assert.equal(calls, 3);
 });
 test("a long reader navigation prelude is skipped without changing stored text or original offsets", async () => {
   const navigation = Array.from(

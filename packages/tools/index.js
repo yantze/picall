@@ -491,11 +491,11 @@ class WebTools {
     });
   }
   async contentFresh(u, run, signal) {
-    // Prefer Jina, but do not let a slow reader block a usable fallback for
-    // 30 seconds (or TinyFish for 110 seconds). Only complete, validated bodies
+    // Race Jina and direct HTTP immediately; add TinyFish after two seconds
+    // without a winner (or when both fail). Only complete, validated bodies
     // can win. The shared cache owns cancellation, so one departing caller
     // cannot abort the other callers' reads.
-    const providers = ["jina", ...(this.env.TINYFISH_KEY ? ["tinyfish_fetch"] : []), "http"];
+    const providers = ["jina", "http", ...(this.env.TINYFISH_KEY ? ["tinyfish_fetch"] : [])];
     const controller = new AbortController();
     const remaining = run.deadline - Date.now();
     if (remaining <= 0) fail("deadline_exceeded", 504);
@@ -530,14 +530,17 @@ class WebTools {
             failures[index] = error instanceof Fault
               ? { provider: p, code: error.code, ...error.details }
               : { provider: p, code: "extraction_error" };
-            // A failed attempt needs no grace period before trying the next.
-            if (next < providers.length) launch();
-            else if (!active) finish(new Fault("content_unavailable", 502, { attempts: failures }));
+            // Give the other initial reader its grace period; if both failed,
+            // there is no reason to delay the remaining fallback.
+            if (!active) {
+              if (next < providers.length) launch();
+              else finish(new Fault("content_unavailable", 502, { attempts: failures }));
+            }
           }
         );
       };
       joined.addEventListener("abort", abort, { once: true });
-      if (joined.aborted) abort(); else launch();
+      if (joined.aborted) abort(); else { launch(); launch(); }
     });
     signal.throwIfAborted();
     const id = crypto.randomUUID();

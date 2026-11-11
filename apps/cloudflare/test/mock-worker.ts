@@ -162,7 +162,7 @@ export class SearchSession extends Base {
       env.USE_GLOBAL_FETCH === '1'
         ? fetch
         : async (url: any) => {
-            if (String(url).startsWith('https://r.jina.ai/')) {
+            if (String(url).startsWith('https://r.jina.ai/') || String(url).startsWith('https://example.com/')) {
               if (String(url).includes('toolpause'))
                 await new Promise((resolve) => setTimeout(resolve, 3000));
               return new Response('Verified source body', {
