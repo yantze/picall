@@ -95,7 +95,13 @@ test("fetch uses Jina then TinyFish with batch markdown contract and persistent 
   const calls = [];
   const { web } = setup(async (url, init) => {
     calls.push(url);
-    if (calls.length === 1) return new Response("", { status: 503 });
+    if (calls.length === 1) {
+      assert.equal(init.headers["X-Proxy"], "none");
+      assert.equal(init.headers.Authorization, "Bearer jina-fixture-key");
+      return new Response("", { status: 503 });
+    }
+    assert.equal(init.headers["X-Proxy"], undefined);
+    assert.equal(init.headers.Authorization, undefined);
     const body = JSON.parse(init.body);
     assert.deepEqual(body.urls, ["https://example.com/page"]);
     assert.equal(body.format, "markdown");
@@ -103,7 +109,7 @@ test("fetch uses Jina then TinyFish with batch markdown contract and persistent 
       results: [{ url: body.urls[0], text: "Useful body text" }],
       errors: []
     });
-  });
+  }, { JINA_KEY: "jina-fixture-key" });
   const result = await web.content("https://example.com/page");
   assert.equal(result.provider, "tinyfish_fetch");
   assert.match(calls[0], /r.jina.ai/);
@@ -116,6 +122,134 @@ test("fetch uses Jina then TinyFish with batch markdown contract and persistent 
     })).found,
     7
   );
+});
+test("a slow Jina body cannot block a complete fallback and only the winner is cached", async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const calls = [];
+  let jinaStarted, jinaAborted = false;
+  const ready = new Promise(resolve => { jinaStarted = resolve; });
+  const { web, map } = setup(async (url, init) => {
+    calls.push(url);
+    if (String(url).includes('r.jina.ai')) {
+      // Headers can arrive promptly while the actual body stalls.
+      return new Response(new ReadableStream({ start(controller) {
+        init.signal.addEventListener('abort', () => {
+          jinaAborted = true;
+          controller.error(init.signal.reason);
+        }, { once: true });
+        jinaStarted();
+      } }), { headers: { 'Content-Type': 'text/plain' } });
+    }
+    return Response.json({ results: [{ text: 'Complete fallback source' }] });
+  });
+  const pending = web.content('https://example.com/slow');
+  await ready;
+  t.mock.timers.tick(1999);
+  assert.equal(calls.length, 1);
+  t.mock.timers.tick(1);
+  const result = await pending;
+  assert.equal(result.provider, 'tinyfish_fetch');
+  assert.equal(result.text, 'Complete fallback source');
+  assert.equal(jinaAborted, true);
+  assert.deepEqual(map.get('calls:run'), { jina: 1, tinyfish_fetch: 1 });
+  assert.equal([...map.keys()].filter(key => key.startsWith('content:')).length, 1);
+  assert.equal((await web.content('https://example.com/slow')).content_id, result.content_id);
+  t.mock.timers.tick(10000);
+  assert.equal(calls.length, 2);
+});
+test("a failed speculative fallback leaves the preferred reader able to finish", async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let release, started, fallbackDone;
+  const ready = new Promise(resolve => { started = resolve; });
+  const fallback = new Promise(resolve => { fallbackDone = resolve; });
+  const { web } = setup(async (url, init) => {
+    if (String(url).includes('r.jina.ai')) {
+      started();
+      await new Promise(resolve => { release = resolve; });
+      assert.equal(init.signal.aborted, false);
+      return new Response('Preferred complete source');
+    }
+    if (!String(url).includes('api.fetch.tinyfish')) fallbackDone();
+    return new Response('', { status: 503 });
+  });
+  const pending = web.content('https://example.com/slow');
+  await ready;
+  t.mock.timers.tick(2000);
+  await fallback;
+  release();
+  assert.equal((await pending).provider, 'jina');
+});
+test("cancelling hedged content aborts every active reader and writes no cache", async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const signals = [];
+  let firstStarted, secondStarted;
+  const first = new Promise(resolve => { firstStarted = resolve; });
+  const second = new Promise(resolve => { secondStarted = resolve; });
+  const { web, map } = setup(async (_url, init) => {
+    signals.push(init.signal);
+    if (signals.length === 1) firstStarted(); else secondStarted();
+    await new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true }));
+  });
+  const controller = new AbortController();
+  const rejected = assert.rejects(web.content('https://example.com/cancel', controller.signal), { name: 'AbortError' });
+  await first;
+  t.mock.timers.tick(2000);
+  await second;
+  controller.abort();
+  await rejected;
+  assert.ok(signals.every(signal => signal.aborted));
+  t.mock.timers.tick(10000);
+  assert.equal(signals.length, 2);
+  assert.ok([...map.keys()].every(key => key.startsWith('calls:')));
+});
+test("fast Jina avoids speculative requests; empty reader envelopes require fallback", async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const fast = setup(async () => new Response('Complete source'));
+  assert.equal((await fast.web.content('https://example.com')).provider, 'jina');
+  t.mock.timers.tick(10000);
+  assert.deepEqual(fast.map.get('calls:run'), { jina: 1 });
+  const empty = setup(async url => String(url).includes('r.jina.ai')
+    ? new Response('Title: An SPA\nURL Source: https://example.com\nMarkdown Content:\n\n')
+    : Response.json({ results: [{ text: 'Rendered article body' }] }));
+  assert.equal((await empty.web.content('https://example.com')).provider, 'tinyfish_fetch');
+});
+test("slow remote readers allow HTTP to finish and missing TinyFish credentials are skipped", async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  for (const tinyfish of ['configured', undefined]) {
+    let firstStarted, secondStarted;
+    const first = new Promise(resolve => { firstStarted = resolve; });
+    const second = new Promise(resolve => { secondStarted = resolve; });
+    const signals = [];
+    const { web, map } = setup(async (url, init) => {
+      if (url === 'https://example.com/source') return new Response('Direct source body');
+      signals.push(init.signal);
+      if (signals.length === 1) firstStarted(); else secondStarted();
+      await new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true }));
+    }, { TINYFISH_KEY: tinyfish });
+    const pending = web.content('https://example.com/source');
+    await first;
+    t.mock.timers.tick(2000);
+    if (tinyfish) { await second; t.mock.timers.tick(2000); }
+    assert.equal((await pending).provider, 'http');
+    assert.ok(signals.every(signal => signal.aborted));
+    assert.deepEqual(map.get('calls:run'), { jina: 1, ...(tinyfish ? { tinyfish_fetch: 1 } : {}), http: 1 });
+  }
+});
+test("the run deadline aborts outstanding content attempts and never caches them", async () => {
+  const signals = [];
+  const { web, map } = setup(async (_url, init) => {
+    signals.push(init.signal);
+    await new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true }));
+  });
+  const run = { id: 'run', deadline: Date.now() + 40 };
+  web.scope = async () => run;
+  // AbortSignal.timeout does not keep Node alive on its own.
+  const keepAlive = setTimeout(() => {}, 1000);
+  try {
+    await assert.rejects(web.content('https://example.com/deadline'), { code: 'deadline_exceeded' });
+    assert.ok(signals.length > 0 && signals.every(signal => signal.aborted));
+    assert.ok([...map.keys()].every(key => key.startsWith('calls:')));
+  } finally { clearTimeout(keepAlive); }
 });
 test("HTTP fallback follows redirects across arbitrary HTTP/HTTPS hosts and retains body limits", async () => {
   const urls = [];
