@@ -8,7 +8,7 @@ export type CloudConfig = {
   host:string;port:number;configVersion:number;apiKey:string;maxSessions:number;idleTimeoutMinutes:number;
   requestTimeoutSeconds:number;toolOverrides:Record<string,boolean>;additionalSystemPrompt:string;
   modelBaseUrl:string;modelApiKey:string;defaultModel:string;modelContextWindow:number;modelMaxTokens:number;
-  enableResearch:boolean;maxToolRounds:number;budgetReminders:boolean;braveApiKey:string;tavilyApiKey:string;tinyfishApiKey:string;exaApiKey:string;jinaApiKey:string;
+  enableResearch:boolean;maxToolRounds:number;budgetReminders:boolean;researchBudgetMode:'fixed'|'staged';braveApiKey:string;tavilyApiKey:string;tinyfishApiKey:string;exaApiKey:string;jinaApiKey:string;
   braveBaseUrl:string;tavilyBaseUrl:string;httpTools:{name:string;description:string;url:string;parameters:Record<string,Json>}[];
   modelProvider:string;aiGatewayId:string;byokAlias:string;
 };

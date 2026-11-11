@@ -1,0 +1,753 @@
+{
+  "date": "2026-11-11",
+  "timezone": "Asia/Shanghai",
+  "baseline_commit": "88cd2042435eb15a5aa9c647fb193410f78bedbe",
+  "model": "deepseek-flash",
+  "http_tools": [],
+  "initial_soft_rounds": 2,
+  "hard_tool_rounds": 8,
+  "deadline_seconds": 300,
+  "summary": [
+    {
+      "question": 0,
+      "variant": "fixed",
+      "n": 3,
+      "median_ms": 6091,
+      "samples_ms": [
+        11985,
+        5898,
+        6091
+      ],
+      "median_model_ms": 5152,
+      "median_tokens": 6693,
+      "tool_rounds": [
+        3,
+        2,
+        2
+      ]
+    },
+    {
+      "question": 0,
+      "variant": "staged",
+      "n": 3,
+      "median_ms": 8920,
+      "samples_ms": [
+        8920,
+        11178,
+        6105
+      ],
+      "median_model_ms": 6702,
+      "median_tokens": 7239,
+      "tool_rounds": [
+        2,
+        3,
+        2
+      ]
+    },
+    {
+      "question": 0,
+      "variant": "concise",
+      "n": 3,
+      "median_ms": 15491,
+      "samples_ms": [
+        7333,
+        15491,
+        23818
+      ],
+      "median_model_ms": 11683,
+      "median_tokens": 18004,
+      "tool_rounds": [
+        2,
+        4,
+        7
+      ]
+    },
+    {
+      "question": 1,
+      "variant": "fixed",
+      "n": 3,
+      "median_ms": 20583,
+      "samples_ms": [
+        14619,
+        25306,
+        20583
+      ],
+      "median_model_ms": 15506,
+      "median_tokens": 30546,
+      "tool_rounds": [
+        2,
+        4,
+        4
+      ]
+    },
+    {
+      "question": 1,
+      "variant": "staged",
+      "n": 3,
+      "median_ms": 10815,
+      "samples_ms": [
+        15961,
+        10815,
+        10050
+      ],
+      "median_model_ms": 8939,
+      "median_tokens": 11421,
+      "tool_rounds": [
+        3,
+        2,
+        2
+      ]
+    },
+    {
+      "question": 1,
+      "variant": "concise",
+      "n": 3,
+      "median_ms": 16997,
+      "samples_ms": [
+        30293,
+        16997,
+        12723
+      ],
+      "median_model_ms": 13353,
+      "median_tokens": 25913,
+      "tool_rounds": [
+        4,
+        2,
+        4
+      ]
+    },
+    {
+      "question": 2,
+      "variant": "fixed",
+      "n": 1,
+      "median_ms": 23100,
+      "samples_ms": [
+        23100
+      ],
+      "median_model_ms": 20939,
+      "median_tokens": 31634,
+      "tool_rounds": [
+        4
+      ]
+    },
+    {
+      "question": 2,
+      "variant": "staged",
+      "n": 1,
+      "median_ms": 21623,
+      "samples_ms": [
+        21623
+      ],
+      "median_model_ms": 19544,
+      "median_tokens": 24349,
+      "tool_rounds": [
+        3
+      ]
+    },
+    {
+      "question": 2,
+      "variant": "concise",
+      "n": 1,
+      "median_ms": 20274,
+      "samples_ms": [
+        20274
+      ],
+      "median_model_ms": 17168,
+      "median_tokens": 22159,
+      "tool_rounds": [
+        3
+      ]
+    }
+  ],
+  "runs": [
+    {
+      "variant": "fixed",
+      "sample": 1,
+      "question": 0,
+      "prompt": "今天新加坡天气怎么样",
+      "started_at": 1794401245734,
+      "status": "completed",
+      "elapsed_ms": 11985,
+      "client_ms": 12171,
+      "model_ms": 7788,
+      "tool_rounds": 3,
+      "model_requests": 4,
+      "usage": {
+        "prompt_tokens": 10756,
+        "completion_tokens": 691,
+        "total_tokens": 11447,
+        "models": {
+          "picall/deepseek-flash": {
+            "input": 7684,
+            "output": 691,
+            "cacheRead": 3072,
+            "cacheWrite": 0,
+            "totalTokens": 11447
+          }
+        }
+      },
+      "answer": "**新加坡今天（11月11日）的天气**：据新加坡气象服务署（MSS）最新更新：\n\n- **当前状况**：今晚 8:30 前后全岛各区域（包括市区、樟宜、裕廊、兀兰等）均为**多云**，没有降雨。\n- **全天温度**：24–34°C；相对湿度 60%–95%；吹偏南西南风，风速 5–15 公里/小时。\n- **今日余下时间**：多云为主。\n\n**明天（11月12日）**：午后北部、西部和东部地区有雷阵雨，出行请留意雷电。\n\n来源：[MSS 24小时预报](https://www.weather.gov.sg/weather-forecast-24hrforecast/)（更新于 11月11日 17:42）、[MSS 2小时即时预报](https://www.weather.gov.sg/weather-forecast-2hr/)（更新于 20:34）。"
+    },
+    {
+      "variant": "staged",
+      "sample": 1,
+      "question": 0,
+      "prompt": "今天新加坡天气怎么样",
+      "started_at": 1794401257906,
+      "status": "completed",
+      "elapsed_ms": 8920,
+      "client_ms": 9099,
+      "model_ms": 6702,
+      "tool_rounds": 2,
+      "model_requests": 3,
+      "usage": {
+        "prompt_tokens": 6567,
+        "completion_tokens": 672,
+        "total_tokens": 7239,
+        "models": {
+          "picall/deepseek-flash": {
+            "input": 5415,
+            "output": 672,
+            "cacheRead": 1152,
+            "cacheWrite": 0,
+            "totalTokens": 7239
+          }
+        }
+      },
+      "answer": "**新加坡今天（11月11日）的天气**\n\n- **当前（晚上约8:45）**：气温约 **27°C（81°F）**，多云、有零散云朵，体感湿度也较高；相对湿度约 **89%**，体感温度约 **31°C（87°F）**，吹来自东北方向的微风（约3公里/时）。\n- **今日气温范围**：约 **24–31°C（76/87°F）**。\n- **今晚至明天**：以阴天为主，间中有**阵雨**，夜间气温约26°C；明天（12日）白天约31°C，午后有阵雨的可能。\n- 昨天新加坡最高约33°C、最低25°C，天气闷热。\n\n建议出门带伞，因为这种天气阵雨来得快，室内外温差大，注意补水。\n\n来源：[Time and Date – Singapore weather](https://www.timeanddate.com/weather/singapore/singapore)（数据更新时间：2026年11月11日下午3:42，新加坡时间；现在气温更新于晚上8:00的观测）"
+    },
+    {
+      "variant": "fixed",
+      "sample": 1,
+      "question": 1,
+      "prompt": "google aistudio 中项目是只能有一个绑定google cloud 吗？",
+      "started_at": 1794401267007,
+      "status": "completed",
+      "elapsed_ms": 14619,
+      "client_ms": 15100,
+      "model_ms": 11439,
+      "tool_rounds": 2,
+      "model_requests": 3,
+      "usage": {
+        "prompt_tokens": 11996,
+        "completion_tokens": 1599,
+        "total_tokens": 13595,
+        "models": {
+          "picall/deepseek-flash": {
+            "input": 10076,
+            "output": 1599,
+            "cacheRead": 1920,
+            "cacheWrite": 0,
+            "totalTokens": 13595
+          }
+        }
+      },
+      "answer": "**结论：不需要“只能有一个”。规则是“一个 API key 对应一个 Cloud 项目，但 AI Studio 里可以导入多个 Cloud 项目”。**\n\n具体分两层看：\n\n**1. 单个 key / 单个项目：1 对 1 绑定**\n- 官方明确说：“Every Gemini API key is associated with a Google Cloud project”，也就是说，**一个 Gemini API key 只会挂在一个 Google Cloud 项目下**。计费、配额、协作者与权限都由这个 Cloud 项目决定。([ai.google.dev](https://ai.google.dev/gemini-api/docs/api-key))\n- 反过来，同一个 Cloud 项目下可以创建多个 key，并不限于 1 个。\n- 新账号接受条款后，AI Studio 会自动创建一个 default 项目并配一个 key；这个 default 项目**就是**一个普通 Cloud 项目，可以在 Dashboard → Projects 里改名。([ai.google.dev](https://ai.google.dev/gemini-api/docs/api-key))\n\n**2. AI Studio 账号层面：可以有多个项目（多个 Cloud 项目）**\n- 文档明确写道：AI Studio 默认不显示你所有的 Cloud 项目，**需要手动导入**：Dashboard → **Projects** → **Import projects** → 勾选要用的 Cloud 项目 → Import，然后到 API Keys 页面在“那个项目下”新建 key。([ai.google.dev](https://ai.google.dev/gemini-api/docs/api-key))\n- 所以常见误解“只能绑定一个”，其实是因为**AI Studio 只显示你导入过的项目**；不导入，就只看到 default 那一个。导入后可以在 Projects / API Keys 页面切换不同项目，各项目各自有 key、各自计费与配额。\n\n**3. 唯一真正的限制**\n- 一个**已存在**的 key 不能“改绑”到另一个 Cloud 项目，因为 key 与所在项目是绑定的。要换项目，就到目标项目下**新建一个 key**，然后在代码或环境变量里换用新 key。([ai.google.dev](https://ai.google.dev/gemini-api/docs/api-key))\n- 补充：自 2026-05-28 起，AI Studio 新建的 key 默认是 auth key，会**直接绑定到该 Cloud 项目里的一个 service account**，权限粒度更细；这也进一步说明绑定关系是固定的。([ai.google.dev](https://ai.google.dev/gemini-api/docs/api-key))\n\n**操作建议**：如果你现在只看到一个项目，去 Dashboard → Projects → Import projects，把其他 Cloud 项目导入即可，并不是账号被限制只能有一个。前提是你对该 Cloud 项目有 `resourcemanager.projects.get`、`apikeys.keys.create`、`serviceusage.services.enable`、`iam.serviceAccounts.create`、`iam.serviceAccountApiKeyBindings.create` 等权限（如 Project Editor），否则建 key 按钮会灰掉。([ai.google.dev](https://ai.google.dev/gemini-api/docs/api-key))"
+    },
+    {
+      "variant": "staged",
+      "sample": 1,
+      "question": 1,
+      "prompt": "google aistudio 中项目是只能有一个绑定google cloud 吗？",
+      "started_at": 1794401282109,
+      "status": "completed",
+      "elapsed_ms": 15961,
+      "client_ms": 16142,
+      "model_ms": 12379,
+      "tool_rounds": 3,
+      "model_requests": 4,
+      "usage": {
+        "prompt_tokens": 20751,
+        "completion_tokens": 1455,
+        "total_tokens": 22206,
+        "models": {
+          "picall/deepseek-flash": {
+            "input": 18447,
+            "output": 1455,
+            "cacheRead": 2304,
+            "cacheWrite": 0,
+            "totalTokens": 22206
+          }
+        }
+      },
+      "answer": "**结论：不是。一个 Google 账号在 AI Studio 里可以关联和使用多个 Google Cloud 项目，但每个 API Key（以及每次部署的应用）只能属于一个 Cloud 项目。**\n\n具体关系是「多对一」，不是「一对一」：\n\n- **AI Studio 账号 → Cloud 项目：可以多个。** 默认情况下，新用户会得到一个自动创建的 default 项目；已有 Cloud 账号的用户则可在 **Dashboard → Projects → Import projects** 中导入任意多个现有项目，然后在 API Keys 页面为不同项目分别建 key（文档明确说 “add a key-project pair”）。[1][2]\n- **API Key → Cloud 项目：只能一个。** 每个 Gemini API key 都关联一个 Google Cloud 项目，计费、配额、协作者和权限都由该项目管理；想换项目就要在该项目下另建 key。[1]\n- **Cloud 项目 → 结算账号：同一时间只能一个。** 一个项目一次只能挂一个 billing account，但一个结算账号可以挂多个项目。[3]\n- **Build 应用部署：每次选一个项目。** 发布时可从下拉框选择 Cloud 项目（可先导入），但一个应用的一次部署对应一个项目；符合条件的新账号还可用 Starter Tier 在完全不建 Cloud 项目/结算账号的情况下发布最多 2 个全栈应用。[4][5]\n\n所以如果你问的是「一个 AI Studio 账号能不能绑多个 Cloud 项目」——能；如果问的是「一个 key / 一个应用能不能同时绑多个 Cloud 项目」——不能。\n\n来源：\n[1] https://ai.google.dev/gemini-api/docs/api-key\n[2] https://ai.google.dev/gemini-api/docs/billing\n[3] https://docs.cloud.google.com/billing/docs/how-to/project-owners/overview\n[4] https://ai.google.dev/gemini-api/docs/aistudio-deploying\n[5] https://codelabs.developers.google.com/deploy-from-aistudio-to-run"
+    },
+    {
+      "variant": "staged",
+      "sample": 2,
+      "question": 0,
+      "prompt": "今天新加坡天气怎么样",
+      "started_at": 1794401298253,
+      "status": "completed",
+      "elapsed_ms": 11178,
+      "client_ms": 11601,
+      "model_ms": 9058,
+      "tool_rounds": 3,
+      "model_requests": 4,
+      "usage": {
+        "prompt_tokens": 14450,
+        "completion_tokens": 892,
+        "total_tokens": 15342,
+        "models": {
+          "picall/deepseek-flash": {
+            "input": 11123,
+            "output": 892,
+            "cacheRead": 3327,
+            "cacheWrite": 0,
+            "totalTokens": 15342
+          }
+        }
+      },
+      "answer": "截至新加坡时间**11月11日晚上8点45分**左右：\n\n- **实况气温**：全岛约 **26–28°C**。气象站读数包括：三巴旺 26.2°C、登加 26.1°C、巴耶利峇 27.4°C、圣淘沙 28.4°C、南洋大道 26.9°C。\n- **未来两小时（20:30–22:30）**：全岛各区域预报均为**多云（Cloudy）**，目前没有降雨预报。\n- 明天（11月12日）预报为**午后雷阵雨**，气温 **24–34°C**，湿度 60%–95%，吹南偏西风。\n\n总体来看：今晚以多云为主，天气闷热，出门一般不用带伞；不过新加坡午后常有雷阵雨，明天下午出门建议备伞。\n\n来源：新加坡政府开放数据平台（MSS/NEA 实时气温、两小时天气预及四天预报）— https://api.data.gov.sg/v1/environment/air-temperature 、https://api.data.gov.sg/v1/environment/2-hour-weather-forecast 、https://api.data.gov.sg/v1/environment/4-day-weather-forecast"
+    },
+    {
+      "variant": "fixed",
+      "sample": 2,
+      "question": 0,
+      "prompt": "今天新加坡天气怎么样",
+      "started_at": 1794401309855,
+      "status": "completed",
+      "elapsed_ms": 5898,
+      "client_ms": 6035,
+      "model_ms": 5152,
+      "tool_rounds": 2,
+      "model_requests": 3,
+      "usage": {
+        "prompt_tokens": 6207,
+        "completion_tokens": 445,
+        "total_tokens": 6652,
+        "models": {
+          "picall/deepseek-flash": {
+            "input": 3519,
+            "output": 445,
+            "cacheRead": 2688,
+            "cacheWrite": 0,
+            "totalTokens": 6652
+          }
+        }
+      },
+      "answer": "**今天新加坡天气概况**（11月11日，晚间约8:45）：\n\n- **当前**：约 **27°C**（81°F），多云；受湿度 89% 影响，体感约 **31°C**（87°F），风向为东北，风速 2 mph。\n- **全天/今夜**：最高约 **31°C**（87°F），最低约 **24°C**（76°F）；夜间有**阵雨**、多云转阴，降雨概率约 30% 左右。\n- **明天**：仍可能有阵雨，随后转阴；后天白天升至约 30°C，降雨概率较低。\n\n总体来看，天气闷热潮湿，建议随身带伞，并注意补水。新加坡 11 月正值雨季，阵雨来得快、去得也快。\n\n来源：[timeanddate.com – Weather for Singapore](https://www.timeanddate.com/weather/singapore/singapore)（更新于2026年11月11日 15:42 新加坡时间）"
+    },
+    {
+      "variant": "staged",
+      "sample": 2,
+      "question": 1,
+      "prompt": "google aistudio 中项目是只能有一个绑定google cloud 吗？",
+      "started_at": 1794401315891,
+      "status": "completed",
+      "elapsed_ms": 10815,
+      "client_ms": 11066,
+      "model_ms": 8939,
+      "tool_rounds": 2,
+      "model_requests": 3,
+      "usage": {
+        "prompt_tokens": 10295,
+        "completion_tokens": 1126,
+        "total_tokens": 11421,
+        "models": {
+          "picall/deepseek-flash": {
+            "input": 6455,
+            "output": 1126,
+            "cacheRead": 3840,
+            "cacheWrite": 0,
+            "totalTokens": 11421
+          }
+        }
+      },
+      "answer": "**是的，AI Studio 里的一个“项目”只能对应一个 Google Cloud 项目。**\n\n更准确地说，AI Studio 里的“项目”其实就是 Google Cloud 项目本身，界面只是访问它的一个入口。官方文档写得很明确：\n\n- “Every Gemini API key is associated with a Google Cloud project.”，也就是说每把 API key 只归属一个 Cloud 项目，计费和配额都按这个项目算。([AI Studio 文档](https://aistudio.google.com/docs/api-key))\n- AI Studio 是“a lightweight interface to access these projects”：新用户默认自动创建一个 Cloud 项目；已有 Cloud 账号的用户则需要手动 **Import projects**，也就是从 Dashboard → Projects → Import projects，把想用的 Cloud 项目导入进来。\n\n所以结论：\n\n1. **一对一**：一个 AI Studio 项目（= 一个 Cloud 项目）不能同时绑定多个 Google Cloud 项目；一把 key 也只能属于一个项目。\n2. **可以有很多个**：你可以导入多个不同的 Cloud 项目，它们在 AI Studio 的 Projects 列表里各自独立存在，各自有独立的 API key、配额和账单，需要分开管理。\n3. **想“换绑”只能换项目**：不能在原项目上再挂另一个 Cloud 项目，需导入/切换到目标 Cloud 项目并在那儿建 key；旧项目里的 key 仍属于旧项目。\n4. 补充一点：现在新建的 key 多为 **auth key**，会绑定该 Cloud 项目内的一个 service account，所以绑定关系同样是 1 个 key 对应 1 个项目内的 1 个 service account。([同上](https://aistudio.google.com/docs/api-key))"
+    },
+    {
+      "variant": "fixed",
+      "sample": 2,
+      "question": 1,
+      "prompt": "google aistudio 中项目是只能有一个绑定google cloud 吗？",
+      "started_at": 1794401326961,
+      "status": "completed",
+      "elapsed_ms": 25306,
+      "client_ms": 25637,
+      "model_ms": 19709,
+      "tool_rounds": 4,
+      "model_requests": 5,
+      "usage": {
+        "prompt_tokens": 29801,
+        "completion_tokens": 2561,
+        "total_tokens": 32362,
+        "models": {
+          "picall/deepseek-flash": {
+            "input": 24041,
+            "output": 2561,
+            "cacheRead": 5760,
+            "cacheWrite": 0,
+            "totalTokens": 32362
+          }
+        }
+      },
+      "answer": "**结论：是的。“一个 AI Studio 项目或应用”只能绑定“一个 Google Cloud 项目”，二者是一对一关系；但“一个 Google Cloud 项目”里可以放多个 Gemini API Key，你的 AI Studio 账号也可以导入多个 Cloud 项目，只是同一时间每个应用、每把 key 只归属其中一个。**\n\n具体分几种情况：\n\n**1. 应用（Build 模式 + Publish）**\n官方 Firebase 集成文档写明：为保证集成顺畅，AI Studio 会自动让**后端和部署使用同一个项目**，“你不能让同一个应用的不同服务使用不同项目”（Project consistency）。所以一个 AI Studio 应用无法一半后端在 A 项目、部署在 B 项目。\n\n**2. API Key 与项目**\n“Every Gemini API key is associated with a Google Cloud project”——每把 key 只属于一个 Cloud 项目，计费、配额、权限都跟着那个项目走。反过来，AI Studio 默认**不会列出你所有 Cloud 项目**，需要在 Dashboard → Projects → Import projects 里逐个导入，导入后可以在不同项目下各建 key，也就是说**可以同时使用多个 Cloud 项目，只是不混在同一个\"项目\"里**。\n\n**3. Starter Tier（免 Cloud 项目/免结算的托管项目）**\n符合条件的账号会得到一个 Google 托管的 Starter Tier 项目，该项目限定：**最多发布 2 个应用、只能用一个 Cloud Run 区域**；要突破这些限制（自定义域名、更高配额等）需要把该项目升级为标准 Cloud 项目，升级会保留已发布的应用和资源。\n\n**4. 常见\"只能选 Default Gemini Project\"的情况**\n这是 AI Studio 的显示或导入问题（论坛 2026-11 有同类报告：Publish 下拉只剩 Default Gemini Project、无 Import 选项），并不是“一个项目只能绑一个 Cloud 项目”的规则限制。可先到 Dashboard → Projects 导入目标项目，再回 Publish 重新选择；若仍不行，多为权限（`resourcemanager.projects.get`、`apikeys.keys.create` 等）或产品端 bug。\n\n来源：\n- https://ai.google.dev/gemini-api/docs/api-key\n- https://ai.google.dev/gemini-api/docs/aistudio-deploying\n- https://firebase.google.com/docs/ai-assistance/ai-studio-integration\n- https://discuss.ai.google.dev/t/ai-studio-publish-cannot-select-my-cloud-project-only-default-gemini-project-shown/199436\n\n如果你指的是另一种“项目”（比如某个具体应用切项目、或一把 key 换项目），告诉我场景，我再帮你确认对应限制。"
+    },
+    {
+      "variant": "fixed",
+      "sample": 3,
+      "question": 0,
+      "prompt": "今天新加坡天气怎么样",
+      "started_at": 1794401352609,
+      "status": "completed",
+      "elapsed_ms": 6091,
+      "client_ms": 6098,
+      "model_ms": 4926,
+      "tool_rounds": 2,
+      "model_requests": 3,
+      "usage": {
+        "prompt_tokens": 6287,
+        "completion_tokens": 406,
+        "total_tokens": 6693,
+        "models": {
+          "picall/deepseek-flash": {
+            "input": 2831,
+            "output": 406,
+            "cacheRead": 3456,
+            "cacheWrite": 0,
+            "totalTokens": 6693
+          }
+        }
+      },
+      "answer": "新加坡今天（2026年11月11日）的天气如下：\n\n- **当前天气**（晚上8点观测）：约 **27°C（81°F）**，有零星云层；体感约 **31°C（87°F）**，湿度 89%\n- **今日气温范围**：约 **24–31°C（76–87°F）**\n- **天气状况**：多云到阴天，间中有阵雨；傍晚降雨概率约 31%，夜间转为多云\n- **风**：东北风，约 3 公里/小时\n\n整体属于新加坡典型的湿热天气，出门建议带伞。数据来源：[timeanddate.com 新加坡天气](https://www.timeanddate.com/weather/singapore/singapore)（更新于当地时间11月11日下午3:42）。"
+    },
+    {
+      "variant": "staged",
+      "sample": 3,
+      "question": 0,
+      "prompt": "今天新加坡天气怎么样",
+      "started_at": 1794401358716,
+      "status": "completed",
+      "elapsed_ms": 6105,
+      "client_ms": 6608,
+      "model_ms": 5524,
+      "tool_rounds": 2,
+      "model_requests": 3,
+      "usage": {
+        "prompt_tokens": 6399,
+        "completion_tokens": 466,
+        "total_tokens": 6865,
+        "models": {
+          "picall/deepseek-flash": {
+            "input": 4352,
+            "output": 466,
+            "cacheRead": 2047,
+            "cacheWrite": 0,
+            "totalTokens": 6865
+          }
+        }
+      },
+      "answer": "新加坡今天（11月11日）晚间：气温约 **27°C**，体感约 31°C，多云有零星云层，湿度约 89%，东北风微弱（约 3 km/h）。今天最高约 **31°C**、最低约 **24°C**，傍晚至夜间有阵雨可能（降水概率约 31%）。\n\n接下来几小时气温在 26–28°C 之间，凌晨可能仍有阵雨。明天（12日）预计 24–31°C，白天以多云为主。\n\n来源：Time and Date（新加坡/Paya Lebar 观测，2026年11月11日 20:00 报告，页面更新于当地 15:42）https://www.timeanddate.com/weather/singapore/singapore\n\n注：以上为当地气象站实况与短期预报，具体降雨时段可能局部变化。"
+    },
+    {
+      "variant": "fixed",
+      "sample": 3,
+      "question": 1,
+      "prompt": "google aistudio 中项目是只能有一个绑定google cloud 吗？",
+      "started_at": 1794401365331,
+      "status": "completed",
+      "elapsed_ms": 20583,
+      "client_ms": 20634,
+      "model_ms": 15506,
+      "tool_rounds": 4,
+      "model_requests": 5,
+      "usage": {
+        "prompt_tokens": 28616,
+        "completion_tokens": 1930,
+        "total_tokens": 30546,
+        "models": {
+          "picall/deepseek-flash": {
+            "input": 24392,
+            "output": 1930,
+            "cacheRead": 4224,
+            "cacheWrite": 0,
+            "totalTokens": 30546
+          }
+        }
+      },
+      "answer": "**结论：是的，AI Studio 中的“项目”与 Google Cloud 项目是一对一关系。一个 AI Studio 项目只能对应一个 Cloud 项目，不能把多个 Cloud 项目绑到同一个 AI Studio 项目上；但这个限制只针对单个项目，**整个账号可以有很多个项目**。**\n\n官方文档对此的说明是：\n\n- “Every Gemini API key is associated with a Google Cloud project. Google Cloud projects manage billing, collaborators, and permissions. Google AI Studio provides a lightweight interface to access these projects.”\n  也就是说，AI Studio 里的“项目”就是 Cloud 项目本身（属于轻量封装），并不是另有一套独立的项目实体。因此，不存在把“一个 AI Studio 项目”同时接入多个 Cloud 项目的做法。\n- 已有 Cloud 项目需要在 AI Studio 的 Dashboard 中通过 **Projects → Import projects** 逐个导入；导入后，在该项目中创建 Key 即可。新用户则会自动获得一个默认 Cloud 项目。\n  来源：<https://ai.google.dev/gemini-api/docs/api-key>\n- 计费和配额都以 **billing account** 为维度分别计算：同一个 billing account 下可以挂多个项目，花费会累计到该账号层级的上限，这说明“多个项目”是正常且被支持的用法。\n  来源：<https://ai.google.dev/gemini-api/docs/billing>\n\n实践中可以这样理解：\n\n- 想换用另一个 Cloud 项目：不能直接“改绑”现有项目；只能新建或导入另一个 AI Studio 项目，并在该项目下创建 API Key。项目可以移动到另一个结算账号（Cloud 侧的“更改项目的结算账号”功能），但这属于更换结算账号，并不是同时绑定多个 Cloud 项目。\n- 同一个 Cloud 项目在 AI Studio 的项目列表中只会出现一次（以一对一的方式对应），不会重复出现或产生多份绑定。\n- 如果要“一个 Key 使用 A 项目、另一个 Key 使用 B 项目”，就需要分别建立两个 AI Studio 项目，每个项目各自对应自己的 Cloud 项目。"
+    },
+    {
+      "variant": "staged",
+      "sample": 3,
+      "question": 1,
+      "prompt": "google aistudio 中项目是只能有一个绑定google cloud 吗？",
+      "started_at": 1794401385969,
+      "status": "completed",
+      "elapsed_ms": 10050,
+      "client_ms": 10076,
+      "model_ms": 7909,
+      "tool_rounds": 2,
+      "model_requests": 3,
+      "usage": {
+        "prompt_tokens": 9660,
+        "completion_tokens": 962,
+        "total_tokens": 10622,
+        "models": {
+          "picall/deepseek-flash": {
+            "input": 5820,
+            "output": 962,
+            "cacheRead": 3840,
+            "cacheWrite": 0,
+            "totalTokens": 10622
+          }
+        }
+      },
+      "answer": "**不是只能有一个：一个 Google Cloud 项目并非 AI Studio 的唯一限制。**\n\n官方文档明确说明：\n\n- 每个 Gemini API 密钥都关联（绑定）到**一个** Google Cloud 项目，该项目用来管理结算、协作者和权限；反过来说，一个密钥只会对应一个 Cloud 项目。\n- 但 AI Studio 账号可以同时导入并管理**多个** Google Cloud 项目：在 Dashboard → Projects 中点击 “Import projects” 搜索并导入所需项目，然后进入 API Keys 页面，在对应项目中创建密钥。旧版行为（新用户自动创建了一个默认项目）只是默认行为，并不代表数量上限。\n- 界面展示的上限是**最多 50 个项目、100 个密钥**（文档原文：\"maximum of 100 keys and 50 projects\"）。\n\n需要注意的几点：\n- 若你已有 Google Cloud 账号，AI Studio 不会自动建默认项目，需要手动导入。\n- 导入的项目可能需要通过[项目验证](https://aistudio.google.com/docs/verification)才能使用免费层级，或配置结算以使用付费层级。\n- AI Studio 只显示未限制或限制到 Gemini API 的密钥；在 Cloud Console 里创建的密钥不一定能在 AI Studio 中看到和管理。\n\n因此，实际常见做法是：不同用途（生产/测试、不同结算账号）分别使用不同的 Cloud 项目，在 AI Studio 里导入多个项目，再分别为每个项目创建密钥，通过切换项目来隔离配额与账单。\n\n来源：[Using Gemini API keys – Google AI Studio 官方文档](https://aistudio.google.com/docs/api-key)"
+    },
+    {
+      "variant": "staged",
+      "sample": 1,
+      "question": 2,
+      "prompt": "比较 Cloudflare Durable Objects 和 Workers KV 的一致性与适用场景，至少引用两个官方来源。",
+      "started_at": 1794401396049,
+      "status": "completed",
+      "elapsed_ms": 21623,
+      "client_ms": 22095,
+      "model_ms": 19544,
+      "tool_rounds": 3,
+      "model_requests": 4,
+      "usage": {
+        "prompt_tokens": 21640,
+        "completion_tokens": 2709,
+        "total_tokens": 24349,
+        "models": {
+          "picall/deepseek-flash": {
+            "input": 17672,
+            "output": 2709,
+            "cacheRead": 3968,
+            "cacheWrite": 0,
+            "totalTokens": 24349
+          }
+        }
+      },
+      "answer": "## 结论先行\n\n两者不是“新旧替代”关系，而是**两种一致性与部署模型**：KV 是只读多、写少、全球缓存的最终一致键值存储；Durable Objects（DO）是每个对象唯一、单线程串行执行、存储与计算同地部署的强一致“协调单元”。官方文档本身就把两者分工写明：KV 文档直接建议“需要更强一致性保证时改用 Durable Objects”，而 `storage-options` 页面把 KV 定义为 eventually consistent、把 DO 定义为提供 strongly consistent key-value storage。([How KV works](https://developers.cloudflare.com/kv/concepts/how-kv-works/)、[Choosing a data or storage product](https://developers.cloudflare.com/workers/platform/storage-options/))\n\n## 一致性对比\n\n| 维度 | Workers KV | Durable Objects |\n|---|---|---|\n| 一致性模型 | 最终一致（eventually-consistent edge key-value store）([KV 文档](https://developers.cloudflare.com/kv/concepts/how-kv-works/)) | 强一致：存储与对象同地部署，因此“strongly consistent yet fast to access”([What are Durable Objects?](https://developers.cloudflare.com/durable-objects/what-are-durable-objects/)) |\n| 写入可见性 | 写入落在中心存储，再通过缓存向外传播。写入所在 location 通常立即可见，但**不保证**；其他 location 可能需 **60 秒甚至更久**（取决于缓存 TTL，默认 60s，可用 `cacheTtl` 调大）| 所有读写都落到该对象的单一实例与同一份事务存储，不存在多副本传播延迟([DO 文档](https://developers.cloudflare.com/durable-objects/what-are-durable-objects/)、[storage-options](https://developers.cloudflare.com/workers/platform/storage-options/)) |\n| 原子性 / 事务 | 明确**不适合**需要原子操作或单事务读写的场景([KV 文档](https://developers.cloudflare.com/kv/concepts/how-kv-works/)) | 提供 transactional storage API；实例全局唯一且单线程、协作式多任务，操作天然串行，可避免竞态([storage-options](https://developers.cloudflare.com/workers/platform/storage-options/)、[Rules of Durable Objects](https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/)) |\n| 易踩的一致性坑 | 负缓存：查询“key 不存在”的结果也会被缓存，所以新建 key 同样有传播延迟；最近读过旧值的 location 更新更慢 | 一致性强但吞吐受限于单个对象串行；不要把所有流量打到单一“全局单例”对象（官方列为 anti-pattern）([Rules of Durable Objects](https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/)) |\n| 写入速率 | 写少读多才合适；同一 key 每秒数十上百次更新的 Redis 式写负载“不是理想选择”([KV 文档](https://developers.cloudflare.com/kv/concepts/how-kv-works/)) | 写可事务化，但同一对象的写入被串行化，需按 key/实体分片扩展 |\n\n## 性能与延迟形态（差异根源）\n\n- **KV**：数据集中存储 + 边缘缓存。热键读取极快（官方称 hot keys 通常 10ms 内），但**冷读**要逐级回源（区域层 → 中心层 → 中心存储），首次访问全球范围都慢；读取频率低而写入不频繁的负载最划算。([KV 文档](https://developers.cloudflare.com/kv/concepts/how-kv-works/)、[storage-options](https://developers.cloudflare.com/workers/platform/storage-options/))\n- **DO**：对象在**单一地点**运行（可选 location hint），请求被路由到拥有该对象的机房。对“同一对象的连续请求”延迟低且能利用内存态，但**全球分散的客户端访问同一对象时必然有 RTT 代价**——这是用延迟换一致性。([DO 文档](https://developers.cloudflare.com/durable-objects/what-are-durable-objects/)、[storage-options](https://developers.cloudflare.com/workers/platform/storage-options/))\n\n## 适用场景\n\n**Workers KV —— 读多写少、可缓存、允许短暂陈旧**\n- 静态资源分发、应用配置、用户偏好、allow-list/deny-list、响应缓存\n- 会话数据、API key/凭据、分布式配置（storage-options 的推荐用法）\n- 反例：需要原子操作、单事务读写、或对同一 key 高频写入的场景\n\n**Durable Objects —— 需要串行化、共享状态或“每实体一个状态”**\n官方列出的适用条件([Rules of Durable Objects](https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/)）：\n- **协调**：多客户端操作共享状态（聊天室、多人游戏、协作文档）\n- **强一致**：操作必须串行以避免竞态（库存扣减、订座/预订系统、回合制游戏）\n- **按实体存储**：每个用户/租户/资源一个隔离数据库（多租户 SaaS）\n- **长连接**：跨越多个请求存活的 WebSocket（实时通知），支持 Hibernation\n- **按实体的定时任务**：订阅续费、超时判定（Alarms API）\n- 相对地，纯无状态、需要最大全球就近分发的请求处理应留在普通 Workers\n\n## 组合用法（官方给出的模式）\n\n如果只需要“写有序、读可最终一致”，官方建议：**把某个 KV key 的所有写入都经由一个对应的 Durable Object 转发，其他 Workers 继续从 KV 读**——这样获得 write-after-write 一致性，同时保留 KV 的全球高速读取。([KV 文档](https://developers.cloudflare.com/kv/concepts/how-kv-works/))\n\n## 选型速查\n\n- 数据能否忍受“最长约 1 分钟”的跨区域陈旧？能 → KV。\n- 是否必须“写完立刻读到、且并发写不能互相覆盖”？是 → DO（并设计好分片键，避免单对象成为全局瓶颈）。\n- 是否既要全球低延迟读、又要写入有序？→ DO 管写 + KV 管读。\n\n以上均引自 Cloudflare 官方文档（`developers.cloudflare.com` 的 KV 概念页、Durable Objects 概念页与最佳实践页、Workers 存储选型页），页面标注的最近更新时间为 2026 年 4 月（KV）、7 月与 11 月（DO）——若你需要核对极细节（如 KV 单 value 大小、DO 存储上限 10GB、区域可用性），建议再查各自的 Limits 页面，我未在此断言这些未核实的数字。"
+    },
+    {
+      "variant": "fixed",
+      "sample": 1,
+      "question": 2,
+      "prompt": "比较 Cloudflare Durable Objects 和 Workers KV 的一致性与适用场景，至少引用两个官方来源。",
+      "started_at": 1794401418147,
+      "status": "completed",
+      "elapsed_ms": 23100,
+      "client_ms": 23138,
+      "model_ms": 20939,
+      "tool_rounds": 4,
+      "model_requests": 5,
+      "usage": {
+        "prompt_tokens": 29012,
+        "completion_tokens": 2622,
+        "total_tokens": 31634,
+        "models": {
+          "picall/deepseek-flash": {
+            "input": 24788,
+            "output": 2622,
+            "cacheRead": 4224,
+            "cacheWrite": 0,
+            "totalTokens": 31634
+          }
+        }
+      },
+      "answer": "## 结论先行\n\n两者最根本的差别是**一致性模型**：KV 是全球复制、边缘缓存的**最终一致**键值存储；Durable Objects（DO）则以“全局唯一实例 + 单线程执行 + 就地事务存储”提供**强一致**的协调能力。因此 KV 适合“读多写少、可缓存”的数据，DO 适合“必须串行化、不能出现竞态”的状态。\n\n| 维度 | Workers KV | Durable Objects |\n|---|---|---|\n| 一致性 | 最终一致（写入先到中心存储，边缘缓存过期后才更新，官方称最长可达 60 秒或更久） | 强一致：存储与计算同地、事务性，且每个 ID 全球只有一个实例 |\n| 并发模型 | 多副本并行读；同一键并发写为后写覆盖（last-write-wins） | 单线程、协作式多任务，同一对象的请求被串行化 |\n| 延迟特征 | 热键边缘读取极快（官方称热键通常 10ms 内），冷读需回源到区域层/中心层，明显更慢 | 请求被路由到拥有该对象的机房，没有“就近边缘缓存”优势；可用 location hint 影响位置 |\n| 写入能力 | 适合低频写；官方明确指出不适合对同一键每秒数十/数百次更新的 Redis 型写负载 | 写受单对象串行度约束，但可水平拆分成海量对象 |\n| 原子性/事务 | 不支持原子操作，也不支持在单个事务中读写；负缓存（键不存在的查询）同样会被缓存 | 提供事务性存储 API（SQLite 后端还支持 SQL），数据仅本对象可访问 |\n| 数据归属 | 命名空间级共享 | 按对象 ID 隔离，每对象独立存储（每对象上限 10GB） |\n\n## 一致性细节\n\n**KV**：写入落到中心数据存储，不会自动推送到每个边缘缓存；读取先看本地缓存，未命中再逐级回源。官方文档明确说：在**写入发生的那一个 Cloudflare 网络位置**，变更“通常”立即可见，但**不保证**，因此不建议依赖；其他位置可能要 **60 秒甚至更久**才看到新值。此外，最近读过旧值（包括“键不存在”的负查询）的位置，感知新值会更慢。所以 KV 存在读到旧值和并发写互相覆盖的窗口，官方也直说它不适合需要原子操作或在单个事务中读写的场景，并建议这类需求改用 Durable Objects。[How KV works](https://developers.cloudflare.com/kv/concepts/how-kv-works/)\n\n**DO**：每个 Durable Object 有全局唯一名称/ID，全球同时只有一个该 ID 的实例在运行，请求由运行时路由到拥有它的机房；附着存储与对象同地，因此“强一致且访问快”，并且是事务性的、只对该对象可见。对象单线程运行，多个请求事件可能仍然乱序到达，但执行被串行化，因此“检查后写入”这类逻辑不会出现双写竞态。[What are Durable Objects?](https://developers.cloudflare.com/durable-objects/concepts/what-are-durable-objects/) 官方最佳实践也把“强一致——操作必须串行化以避免竞态（库存、订票、回合制游戏）”列为使用 DO 的典型理由。[Rules of Durable Objects](https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/)\n\n## 适用场景\n\n- **选 KV**：静态资源分发、应用配置/功能开关、用户偏好、allow/deny 列表、会话与 API 凭据、以及“读多写少、可容忍几十秒延迟”的全局缓存。官方定位是“高性能读、低延迟全球读、按对象 TTL”。[Choosing a data or storage product](https://developers.cloudflare.com/workers/platform/storage-options/)\n- **选 DO**：聊天室、多人协作文档、多人游戏/回合制游戏、库存与座位预订等需要串行化的业务、按用户/租户隔离的 per-entity 存储、长连 WebSocket、按实体的定时任务（Alarms）。[Rules of Durable Objects](https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/)\n\n**折中模式**：如果既要写操作的确定性、又想要 KV 的全球读性能，官方建议把某个 KV 键的所有写入都经过对应的 Durable Object，再由其他 Worker 从 KV 读取——即“用 DO 管写入顺序，用 KV 服务读取”。[How KV works](https://developers.cloudflare.com/kv/concepts/how-kv-works/)\n\n## 实践注意\n\n- 不要用一个 DO 当“全局单例”扛全站流量：单线程会成瓶颈，官方将其列为反模式；应按实体（用户、房间、订单 ID）分片，让负载分散到百万级对象上。\n- KV 的 `cacheTtl` 默认 60 秒，调大可提升性能，但会进一步拉长跨区域可见延迟。\n- DO 并非在所有 Cloudflare 机房可用，且请求要路由到对象所在位置，对“全球任何角落都要求极低延迟”的纯读场景不如 KV。\n\n**来源**（均为 Cloudflare 官方文档）：[KV: How KV works](https://developers.cloudflare.com/kv/concepts/how-kv-works/)（2026-04-21 更新）、[Durable Objects: What are Durable Objects?](https://developers.cloudflare.com/durable-objects/concepts/what-are-durable-objects/)、[Choosing a data or storage product](https://developers.cloudflare.com/workers/platform/storage-options/)、[Rules of Durable Objects](https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/)（2026-11-05 更新）。"
+    },
+    {
+      "variant": "concise",
+      "sample": 1,
+      "question": 0,
+      "prompt": "今天新加坡天气怎么样",
+      "started_at": 1794401442300,
+      "status": "completed",
+      "elapsed_ms": 7333,
+      "client_ms": 7655,
+      "model_ms": 5309,
+      "tool_rounds": 2,
+      "model_requests": 3,
+      "usage": {
+        "prompt_tokens": 7053,
+        "completion_tokens": 433,
+        "total_tokens": 7486,
+        "models": {
+          "picall/deepseek-flash": {
+            "input": 5645,
+            "output": 433,
+            "cacheRead": 1408,
+            "cacheWrite": 0,
+            "totalTokens": 7486
+          }
+        }
+      },
+      "answer": "新加坡今晚约 **27°C（81°F）**，有零散云层，体感约 30°C；晚间仍可能有阵雨。\n\n- **当前实况**（2026-11-11 20:00，Paya Lebar 站）：气温 27°C，湿度约 89%，东北风 2 mph。\n- **今日预报**：最高约 31°C、最低约 24°C（87/76°F），晚间有阵雨，降雨概率约 31%。\n-  Nearby 樟宜机场同时报告 27°C、零散云。\n\n来源：[timeanddate.com 新加坡天气](https://www.timeanddate.com/weather/singapore/singapore)"
+    },
+    {
+      "variant": "concise",
+      "sample": 1,
+      "question": 1,
+      "prompt": "google aistudio 中项目是只能有一个绑定google cloud 吗？",
+      "started_at": 1794401449957,
+      "status": "completed",
+      "elapsed_ms": 30293,
+      "client_ms": 30648,
+      "model_ms": 26704,
+      "tool_rounds": 4,
+      "model_requests": 5,
+      "usage": {
+        "prompt_tokens": 37167,
+        "completion_tokens": 3563,
+        "total_tokens": 40730,
+        "models": {
+          "picall/deepseek-flash": {
+            "input": 33711,
+            "output": 3563,
+            "cacheRead": 3456,
+            "cacheWrite": 0,
+            "totalTokens": 40730
+          }
+        }
+      },
+      "answer": "**结论：AI Studio 里的“项目”本身就是一个 Google Cloud 项目，两者一对一对应。一个 AI Studio 项目不能再关联第二个 Cloud 项目；但你的账号可以导入多个 Cloud 项目，同一个 Cloud 项目下也可以创建多个 API key。**\n\n具体规则：\n\n- **Dashboard → Projects 里列出的就是 Cloud 项目**：新用户接受条款后，AI Studio 会自动建一个默认 Cloud 项目；已有 Cloud 账号则要手动 **Import projects**，而且可以一次导入多个（[官方文档](https://ai.google.dev/gemini-api/docs/api-key)）。\n- **每个 Gemini API key 只属于一个 Cloud 项目**，计费、配额和协作者权限都由该项目决定，因此不能把同一把 key 或同一个 AI Studio 项目同时绑定到多个 Cloud 项目。\n- **发布应用（Build 模式）时只选一个项目**：使用付费方案时，需要关联一个已启用 Cloud Billing 的 Cloud 项目，应用会作为该项目的 Cloud Run 服务运行；使用免费的 Starter Tier 时，AI Studio 会托管一个 Google 管理的项目，最多发布 2 个应用，之后可升级为标准 Cloud 项目（[发布文档](https://ai.google.dev/gemini-api/docs/aistudio-deploying)）。发布后要改绑到另一个 Cloud 项目，目前操作并不顺畅，开发者论坛里有多起“部署到错误项目后无法重选”的报告（[示例](https://discuss.ai.google.dev/t/restore-ai-studio-publish-association-wrong-google-cloud-project/189311)）。\n\n如果你想问的是“多个 AI Studio 应用能不能共用一个 Cloud 项目”或“一个 Cloud 项目能被几个 AI Studio 应用使用”，请说明具体情况，我可以再细查。"
+    },
+    {
+      "variant": "concise",
+      "sample": 2,
+      "question": 0,
+      "prompt": "今天新加坡天气怎么样",
+      "started_at": 1794401480607,
+      "status": "completed",
+      "elapsed_ms": 15491,
+      "client_ms": 15633,
+      "model_ms": 11683,
+      "tool_rounds": 4,
+      "model_requests": 5,
+      "usage": {
+        "prompt_tokens": 16667,
+        "completion_tokens": 1337,
+        "total_tokens": 18004,
+        "models": {
+          "picall/deepseek-flash": {
+            "input": 11419,
+            "output": 1337,
+            "cacheRead": 5248,
+            "cacheWrite": 0,
+            "totalTokens": 18004
+          }
+        }
+      },
+      "answer": "**今天（11月11日）新加坡以多云为主，午后闷热，局部地区有雷阵雨；截至晚间全岛转为多云。**\n\n- **实况（截至晚上8点）**：最高气温 **34.1°C**（Old Choa Chu Kang Road，下午12:47），最低 **24.4°C**（Tengah，清晨5:45）；Woodlands Drive 62 记录到 **49.4毫米** 降雨。晚上8:51 左右约 **27°C**，多云。\n- **今晚**：新加坡气象署 8:34pm 发布的2小时临近预报显示，8:30–10:30pm 全岛各区域均为**多云**，剩余时间大致无雨。\n- **明天（11月12日）**：午后北部、西部和东部有雷阵雨，气温 **24–34°C**，降雨概率 **60%–95%**，吹西南风 5–15 km/h。\n\n来源：[新加坡气象署](https://www.weather.gov.sg/home/)、[AccuWeather](https://www.accuweather.com/en/sg/singapore/300597/weather-forecast/300597)"
+    },
+    {
+      "variant": "concise",
+      "sample": 2,
+      "question": 1,
+      "prompt": "google aistudio 中项目是只能有一个绑定google cloud 吗？",
+      "started_at": 1794401496242,
+      "status": "completed",
+      "elapsed_ms": 16997,
+      "client_ms": 17098,
+      "model_ms": 13353,
+      "tool_rounds": 2,
+      "model_requests": 3,
+      "usage": {
+        "prompt_tokens": 11509,
+        "completion_tokens": 1653,
+        "total_tokens": 13162,
+        "models": {
+          "picall/deepseek-flash": {
+            "input": 8181,
+            "output": 1653,
+            "cacheRead": 3328,
+            "cacheWrite": 0,
+            "totalTokens": 13162
+          }
+        }
+      },
+      "answer": "**结论：不是只能绑一个。**AI Studio 本身可以在一个账号下接入多个 Google Cloud 项目；真正“一对一”的是“每个 API 密钥对应一个 Cloud 项目”，而不是“账号只能有一个项目”。\n\n- 官方文档说明：每个 Gemini API 密钥都关联一个 Google Cloud 项目（计费、权限、协作者都挂在项目上），AI Studio 只是访问这些项目的轻量界面。新用户会自动生成一个默认项目；已有 Cloud 账号的用户则需在 Dashboard → Projects 里用 “Import projects” 导入想用的项目，可导入多个，然后在其中创建密钥。([ai.google.dev](https://ai.google.dev/gemini-api/docs/api-key))\n- 发布应用（Build/Publish）时，每次发布需确认/选择一个项目：免费 Starter Tier 是 Google 托管的一个项目（每账号最多 2 个应用、单一 Cloud Run 区域）；付费则用已关联且开通结算的 Cloud 项目，升级会保留已发布应用。([ai.google.dev](https://ai.google.dev/gemini-api/docs/aistudio-deploying))\n\n所以：一个项目/密钥只归属一个 Cloud 项目，但一个 AI Studio 账号可以管理多个 Cloud 项目；限制在于每个应用发布时绑定单一项目，而非全局限一个。"
+    },
+    {
+      "variant": "concise",
+      "sample": 3,
+      "question": 0,
+      "prompt": "今天新加坡天气怎么样",
+      "started_at": 1794401513344,
+      "status": "completed",
+      "elapsed_ms": 23818,
+      "client_ms": 24282,
+      "model_ms": 17139,
+      "tool_rounds": 7,
+      "model_requests": 8,
+      "usage": {
+        "prompt_tokens": 50440,
+        "completion_tokens": 1665,
+        "total_tokens": 52105,
+        "models": {
+          "picall/deepseek-flash": {
+            "input": 42760,
+            "output": 1665,
+            "cacheRead": 7680,
+            "cacheWrite": 0,
+            "totalTokens": 52105
+          }
+        }
+      },
+      "answer": "今天（11月11日）新加坡傍晚转为多云，天气温暖潮湿。**20:30–22:30 全岛两小时预报均为多云**；**20:49 各气象站气温约 26.1–28.4°C**。今晚外出不用带伞，但午后雷阵雨是近期常态：明天（12日）预计午后有雷阵雨，气温 24–34°C。\n\n来源：新加坡政府开放数据 [两小时天气预报](https://api.data.gov.sg/v1/environment/2-hour-weather-forecast)、[实时气温](https://api.data.gov.sg/v1/environment/air-temperature)、[四天预报](https://api.data.gov.sg/v1/environment/4-day-weather-forecast)（均更新于2026-11-11）。"
+    },
+    {
+      "variant": "concise",
+      "sample": 3,
+      "question": 1,
+      "prompt": "google aistudio 中项目是只能有一个绑定google cloud 吗？",
+      "started_at": 1794401537629,
+      "status": "completed",
+      "elapsed_ms": 12723,
+      "client_ms": 13156,
+      "model_ms": 10255,
+      "tool_rounds": 4,
+      "model_requests": 5,
+      "usage": {
+        "prompt_tokens": 24774,
+        "completion_tokens": 1139,
+        "total_tokens": 25913,
+        "models": {
+          "picall/deepseek-flash": {
+            "input": 19526,
+            "output": 1139,
+            "cacheRead": 5248,
+            "cacheWrite": 0,
+            "totalTokens": 25913
+          }
+        }
+      },
+      "answer": "**不是只能绑定一个。** 在 Google AI Studio 里，“项目”实际上就是 Google Cloud 项目；同一个 Google 账号可以向 AI Studio 导入多个 Cloud 项目，并分别为它们创建 API 密钥。\n\n- 每个 Gemini API 密钥**只关联一个** Google Cloud 项目；计费、配额和权限都按该项目归属（[官方文档](https://ai.google.dev/gemini-api/docs/api-key)）。\n- 一个 Cloud 项目下可以创建**多个** API 密钥，这些密钥共享该项目的配额。\n- AI Studio 的限制是：Projects 页一次最多创建 10 个项目，页面最多显示 50 个项目和 100 个密钥；如果需要更多，或者要管理更多项目，可以在 Cloud 控制台操作。\n\n所以，是“一个 key 对应一个项目”，而不是“一个账号只能有一个项目”。"
+    },
+    {
+      "variant": "concise",
+      "sample": 1,
+      "question": 2,
+      "prompt": "比较 Cloudflare Durable Objects 和 Workers KV 的一致性与适用场景，至少引用两个官方来源。",
+      "started_at": 1794401550787,
+      "status": "completed",
+      "elapsed_ms": 20274,
+      "client_ms": 20663,
+      "model_ms": 17168,
+      "tool_rounds": 3,
+      "model_requests": 4,
+      "usage": {
+        "prompt_tokens": 20080,
+        "completion_tokens": 2079,
+        "total_tokens": 22159,
+        "models": {
+          "picall/deepseek-flash": {
+            "input": 16240,
+            "output": 2079,
+            "cacheRead": 3840,
+            "cacheWrite": 0,
+            "totalTokens": 22159
+          }
+        }
+      },
+      "answer": "**结论：Workers KV 采用最终一致性，适合读多写少、可缓存的全局数据；Durable Objects（DO）采用单对象强一致、事务性存储，并通过串行执行来协调状态，适合库存、预订、聊天室等需要避免竞态的场景。**\n\n| 维度 | Workers KV | Durable Objects |\n|---|---|---|\n| 一致性 | **最终一致**：写入先到中心存储，再通过缓存分发；在写入发生的 Cloudflare 网络位置通常立即可见，但不保证；其他位置可能要等 **60 秒或更久**，不存在的键也会被缓存 | **强一致、事务性**：每个 Object 的存储与计算放在一起，且只供该 Object 访问；Object 单线程执行，同一 Object 内的操作可串行化，避免并发写冲突 |\n| 数据边界 | 全局 KV 命名空间，按 key 访问 | 每个 Object 是独立的一致性单元，有全局唯一 ID；**不同 Object 之间不共享事务**，不应把单个 Object 当全局单例 |\n| 性能取向 | 高读取量、低延迟；未命中缓存时需回源，延迟更高 | 请求路由到该 Object 所在位置；适合围绕单个实体做低延迟读写与协调 |\n| 主要限制 | 不适合原子操作，也不适合在同一事务中读写多个值；同一个键高频写入也不合适 | 不适合无状态请求处理，也不适合要求最大全球分布、完全并行的高扇出请求 |\n\n**适用场景**\n\n- **KV**：静态资源、应用配置、用户偏好、允许/拒绝列表、缓存等读多写少、高度可缓存的数据。\n- **DO**：聊天室、多人在线游戏、协作文档；库存管理与订座等必须串行化以防超卖的场景；按用户/租户隔离的存储；长连接 WebSocket；按实体触发的定时任务。\n\n因此，判断标准不是“谁更快”，而是**数据能否容忍短暂陈旧**：能容忍就优先 KV；若正确性依赖原子检查和写入，或需要让多个客户端围绕同一份状态协调，就使用 Durable Objects。\n\n来源（Cloudflare 官方文档）：\n- [How KV works](https://developers.cloudflare.com/kv/concepts/how-kv-works)\n- [What are Durable Objects?](https://developers.cloudflare.com/durable-objects/concepts/what-are-durable-objects/)\n- [Rules of Durable Objects](https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/)"
+    }
+  ],
+  "exploratory_concise_prompt": "按问题复杂度使用工具：简单事实优先一次搜索和一个权威来源，证据充分后立即回答；复杂研究按需补查。\n最终答案按用户所问范围组织：简单事实或规则问题，先用一句话给结论，再给最多3条必要事实和来源，通常150–250中文字；不主动展开相关但未问的历史、湿度、计费、权限或部署教程。复杂比较或用户要求详细时不受此简洁目标限制，仍需完成全部要求。不要用含糊的多对一/一对多概括不同实体，逐项说明实体关系。只说证据支持的限制，不说唯一限制、任意多个或无限。天气页面时钟不是观测时间，多云预报不代表没有降雨；当前实况必须引用最新观测时间，预报必须标明有效期。"
+}

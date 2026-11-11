@@ -49,10 +49,12 @@ test('SIGKILL while the model streams resumes without returning partial assistan
 });
 
 test('SIGKILL during a tool keeps completed search results and replays only the unfinished read',{timeout:30000},async t=>{
-  const f=await environment(t);f.services.readerDelay=5000;const first=await f.launch();
+  const f=await environment(t);await f.store.update({researchBudgetMode:'staged'});f.services.readerDelay=5000;const first=await f.launch();
   const run=await first.call('submit',{input:completion('RESEARCH')});await until(()=>f.services.reader===1);await first.kill();f.services.readerDelay=0;
   const second=await f.launch(),done=await second.call('wait',{id:run.id});assert.equal(done.status,'completed',JSON.stringify(done));assert.equal(f.services.search,1);assert.equal(f.services.reader,2);assert.equal(done.completion.usage.total_tokens,45);
   assert.ok(JSON.stringify(f.services.requests.at(-1).messages).includes('RESEARCH BUDGET: 2/8'));
+  assert.ok(JSON.stringify(f.services.requests.at(-1).messages).includes('single extension phase'));
+  assert.equal(done.timings.budget_phase,'extended');assert.equal(done.timings.round_target,7);
 });
 
 test('expired staged input is failed before any model request after restart',{timeout:30000},async t=>{

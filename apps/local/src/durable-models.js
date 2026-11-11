@@ -4,4 +4,5 @@ const fields = ['modelBaseUrl', 'modelApiKey', 'defaultModel', 'modelContextWind
   'maxToolRounds', 'requestTimeoutSeconds', 'additionalSystemPrompt', 'toolOverrides', 'braveApiKey', 'tavilyApiKey',
   'tinyfishApiKey', 'exaApiKey', 'jinaApiKey', 'braveBaseUrl', 'tavilyBaseUrl', 'httpTools'];
 export const configFingerprint = config => fingerprint({ ...Object.fromEntries(fields.map(field => [field, config[field] ?? null])),
-  ...(config.budgetReminders === false ? {budgetReminders:false} : {}) });
+  ...(config.budgetReminders === false ? {budgetReminders:false} : {}),
+  ...(config.researchBudgetMode === 'staged' ? {researchBudgetMode:'staged'} : {}) });

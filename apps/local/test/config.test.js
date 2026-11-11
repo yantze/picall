@@ -100,6 +100,7 @@ test('invalid URLs, keys, limits and custom schemas are rejected without changin
   const before = await readFile(store.path, 'utf8');
   const active = structuredClone(store.value);
   const invalid = [
+    { researchBudgetMode: 'unknown' },
     { modelBaseUrl: 'file:///tmp/model' },
     { modelBaseUrl: 'https://user:secret@example.com/v1' },
     { modelBaseUrl: 'https://example.com/v1?api_key=secret' },

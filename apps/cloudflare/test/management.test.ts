@@ -69,8 +69,12 @@ test('late admission metadata cannot replace a completed result or regress manag
 });
 test('budget reminders use durable rounds on Workers AI and can be disabled without disabling measurement',async t=>{
   const f=await fixture(t),cookie=await login(f.mf);
+  const initial:any=await(await manage(f.mf,cookie,'/api/config')).json();
+  assert.equal((await manage(f.mf,cookie,'/api/config',{revision:initial.revision,researchBudgetMode:'staged'})).status,200);
   const first:any=await(await req(f.mf,'/v1/runs',{prompt:'research'})).json();
   const done=await settled(f.mf,first.id);assert.equal(done.timings.model_requests,4);assert.equal(done.timings.tool_rounds,3);
+  assert.equal(done.timings.budget_strategy,'staged');assert.equal(done.timings.budget_phase,'extended');
+  assert.equal(done.timings.initial_round_target,2);assert.equal(done.timings.round_target,7);
   const ns=await f.mf.getDurableObjectNamespace('SESSIONS');
   const snapshot:any=await(await ns.get(ns.idFromName(first.sessionId)).fetch('https://internal/test-snapshot')).json();assert.deepEqual(snapshot.budgets,[0,1,2,3]);
   const config:any=await(await manage(f.mf,cookie,'/api/config')).json();

@@ -113,6 +113,7 @@ function applyConfig(config) {
   $('model-max-tokens').value = config.modelMaxTokens ?? 8192;
   $('enable-research').checked = config.enableResearch !== false;
   $('budget-reminders').checked = config.budgetReminders !== false;
+  $('research-budget-mode').value = config.researchBudgetMode || 'fixed';
   $('brave-base-url').value = config.braveBaseUrl ?? 'https://brave.vastiny.com/res/v1';
   $('tavily-base-url').value = config.tavilyBaseUrl ?? 'https://tavily.vastiny.com';
   $('max-tool-rounds').value = config.maxToolRounds ?? 8;
@@ -436,6 +437,7 @@ async function saveConfig(event) {
     modelMaxTokens: Number($('model-max-tokens').value),
     enableResearch: $('enable-research').checked,
     budgetReminders:$('budget-reminders').checked,
+    researchBudgetMode:$('research-budget-mode').value,
     braveBaseUrl: $('brave-base-url').value.trim(),
     tavilyBaseUrl: $('tavily-base-url').value.trim(),
     maxToolRounds: Number($('max-tool-rounds').value),

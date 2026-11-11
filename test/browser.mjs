@@ -23,6 +23,7 @@ try {
   page.on('pageerror',error=>errors.push(error.message));
   await page.goto(f.base);
   await page.waitForFunction(()=>document.querySelector('#model').value==='picall/fixture-model');
+  assert.equal(await page.locator('#research-budget-mode').inputValue(),'fixed');
   await page.locator('#prompt').fill('RESEARCH');
   await page.locator('#run-button').click();
   await page.waitForFunction(()=>document.querySelector('#response-meta').textContent.startsWith('完成'));
@@ -60,9 +61,11 @@ try {
   assert.equal(await cloud.locator('#logout-button').isVisible(),true);
   await cloud.locator('[data-view="settings"]').click();await cloud.locator('#settings-tab-research').click();
   await cloud.locator('#budget-reminders').uncheck();
+  await cloud.locator('#research-budget-mode').selectOption('staged');
   await cloud.locator('#brave-api-key').fill('browser-search-secret-canary');await cloud.locator('#save-button').click();
   await cloud.waitForFunction(()=>document.querySelector('#toast').textContent.includes('设置已保存'));assert.equal(await cloud.locator('#brave-api-key').inputValue(),'');
   assert.equal(await cloud.locator('#budget-reminders').isChecked(),false);
+  assert.equal(await cloud.locator('#research-budget-mode').inputValue(),'staged');
   await cloud.locator('[data-view="overview"]').click();await cloud.locator('#prompt').fill('research');await cloud.locator('#run-button').click();
   await cloud.waitForFunction(()=>document.querySelector('#response-meta').textContent.startsWith('完成'));
   assert.match(await cloud.locator('#response-output').textContent(),/Final answer/);
@@ -75,6 +78,7 @@ try {
   await cloud.locator('#prompt').fill('ping');await cloud.locator('#run-button').click();await cloud.waitForFunction(()=>document.querySelector('#response-meta').textContent.startsWith('完成'));
   assert.equal(await cloud.locator('#response-output').textContent(),'Compatible gateway pong');assert.equal(authorization,'Bearer !literal-browser-model-key');
   await cloud.reload();await cloud.waitForFunction(()=>document.querySelector('#model').value==='picall/deepseek-flash');
+  assert.equal(await cloud.locator('#research-budget-mode').inputValue(),'staged');
   await cloud.setViewportSize({width:390,height:844});assert.ok(await cloud.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await cloud.screenshot({path:'test-results/cloudflare-mobile.png',fullPage:true});
   await cloud.locator('#logout-button').click();await cloud.waitForFunction(()=>!document.querySelector('#login-panel').hidden);
   assert.deepEqual(errors,[]);

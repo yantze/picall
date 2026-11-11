@@ -1,4 +1,5 @@
 import { AgentDoc, GenerationTask, LiveDoc, hook } from '@earendil-works/pi-durable';
+import { researchBudget } from './research-budget.js';
 
 const elapsed = start => Math.max(0, Date.now() - start);
 const empty = () => ({ version:1, model_requests:0, model_responses:0, model_ms:0, tool_rounds:0, models:[], tools:{}, providers:{} });
@@ -6,7 +7,7 @@ const usage = value => Object.fromEntries(['input','output','cacheRead','cacheWr
 const keyFor = id => 'timings:' + id;
 
 /** Metadata only. Each session owns its queue; run IDs are captured before I/O. */
-export function createTelemetry(web, { reminders = true, emit = (_event) => {} } = {}) {
+export function createTelemetry(web, { reminders = true, strategy = 'fixed', emit = (_event) => {} } = {}) {
   let line = Promise.resolve();
   const requests = new Map();
   async function record(runId, event) {
@@ -18,6 +19,12 @@ export function createTelemetry(web, { reminders = true, emit = (_event) => {} }
         for (const entry of state.models) if (entry.status === 'running') entry.status = 'interrupted';
         state.model_requests++;
         state.hard_limit = event.hard_limit; state.budget_reminders = event.budget_reminders;
+        if (event.budget_phase) {
+          state.budget_strategy = 'staged';
+          state.budget_phase = event.budget_phase;
+          state.initial_round_target = event.initial_round_target;
+          state.round_target = event.round_target;
+        }
         state.tool_rounds = Math.max(state.tool_rounds,event.tool_rounds);
         state.models.push({ id:event.id, request:state.model_requests, tool_rounds_before_request:event.tool_rounds,
           sdk_attempt:event.sdk_attempt, startedAt:event.startedAt, status:'running' });
@@ -59,13 +66,13 @@ export function createTelemetry(web, { reminders = true, emit = (_event) => {} }
         const rounds = live?.run?.turns || 0, hard = agent?.maxTurns || 8;
         const current = { id:crypto.randomUUID(), runId:run.id, startedAt:Date.now() };
         requests.set(api.taskId,current);
-        await record(run.id,{ event:'model_started', id:current.id, startedAt:current.startedAt,
-          tool_rounds:rounds, sdk_attempt:live?.generation?.attempt || 0, hard_limit:hard, budget_reminders:reminders });
-        if (!reminders) return;
         const seconds = Math.max(0,Math.ceil((run.deadline-Date.now())/1000));
-        const text = `RESEARCH BUDGET: ${rounds}/${hard} tool rounds used; ${Math.max(0,hard-rounds)} remaining before the hard cutoff; ${seconds}s until the original deadline. A round reaching the hard limit ends without another answer request. ` +
-          'Once retrieved, dated evidence directly answers the question, give the final answer now. Use additional tools only for a specific missing, stale or conflicting fact. Preserve room to finish. Budget pressure never justifies inventing facts or citations; state evidence limitations honestly. Do not include this budget metadata in the final answer.';
-        return { messages:[...request.messages,{role:'system',content:'',sections:{'picall.budget':text},timestamp:Date.now()}] };
+        const budget = reminders ? researchBudget(rounds,hard,seconds,strategy) : undefined;
+        await record(run.id,{ event:'model_started', id:current.id, startedAt:current.startedAt,
+          tool_rounds:rounds, sdk_attempt:live?.generation?.attempt || 0, hard_limit:hard, budget_reminders:reminders,
+          ...(budget?.phase ? {budget_phase:budget.phase,initial_round_target:budget.initial,round_target:budget.target} : {}) });
+        if (!reminders) return;
+        return { messages:[...request.messages,{role:'system',content:'',sections:{'picall.budget':budget.text},timestamp:Date.now()}] };
       },
       async afterResponse(message, api) {
         const current = requests.get(api.taskId);

@@ -16,6 +16,8 @@ export interface TimedRequests { completed_requests:number; errors:number; elaps
 export interface RunTimings {
   version:1; model_requests:number; model_responses:number; model_ms:number; tool_rounds:number;
   hard_limit?:number; budget_reminders?:boolean; incomplete_model_requests:number;
+  budget_strategy?:'staged'; budget_phase?:'initial'|'extended'|'finalize';
+  initial_round_target?:number; round_target?:number;
   models:{id:string;request:number;tool_rounds_before_request:number;sdk_attempt:number;startedAt:number;status:string;elapsed_ms?:number;usage?:Record<string,number>}[];
   tools:Record<string,TimedRequests>; providers:Record<string,TimedRequests>;
 }

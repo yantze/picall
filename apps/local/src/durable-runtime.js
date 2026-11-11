@@ -164,7 +164,7 @@ export class DurableRuntime {
       },
     };
     const research = createResearchTools(config, { store, scope: async () => { guard(); return { id: handle.active.id, deadline: handle.active.deadline }; }, ...(this.net ? { fetch: this.net } : {}) });
-    handle.telemetry = createTelemetry(research.web,{reminders:config.enableResearch && config.budgetReminders !== false,
+    handle.telemetry = createTelemetry(research.web,{reminders:config.enableResearch && config.budgetReminders !== false,strategy:config.researchBudgetMode,
       emit:event=>this.logger?.log(event.event.endsWith('finished')?'info':'debug','Research timing.',event)});
     const registry = researchRegistry(research.web, {
       telemetry:handle.telemetry,

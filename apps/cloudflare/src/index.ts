@@ -120,7 +120,7 @@ export class SearchSession extends DurableObject<Env> {
       this.executionConfig = config;
       this.modelRuntime = configuredRuntime(this.env, config, () => this.guard());
       this.web.env = { ...this.web.env, ...toolEnv(config) };
-      const telemetry=createTelemetry(this.web,{reminders:config.enableResearch && config.budgetReminders !== false,emit:event=>console.log(JSON.stringify(event))});
+      const telemetry=createTelemetry(this.web,{reminders:config.enableResearch && config.budgetReminders !== false,strategy:config.researchBudgetMode,emit:event=>console.log(JSON.stringify(event))});
       this.registry = this.web.registry({ enabled:config.enableResearch, overrides:config.toolOverrides, guard:() => this.guard(),telemetry });
       const pi = await Harness.open(storage, { models:this.modelRuntime!.models, registry:this.registry, onWake,
         settings:{ retry:{enabled:true,maxRetries:2,baseDelayMs:1000,maxAgentDelayMs:10000}, restartLimit:5, afterFailedRun:'withdraw' },
@@ -494,8 +494,9 @@ export function toolEnv(config: CloudConfig) {
     BRAVE_BASE_URL:config.braveBaseUrl,TAVILY_BASE_URL:config.tavilyBaseUrl,HTTP_TOOLS:JSON.stringify(config.httpTools) };
 }
 export async function executionFingerprint(config: CloudConfig) {
-  const { apiKey,host,port,maxSessions,idleTimeoutMinutes,configVersion,budgetReminders,...execution } = config;
-  return identityFingerprint({...execution,...(budgetReminders === false?{budgetReminders:false}:{})});
+  const { apiKey,host,port,maxSessions,idleTimeoutMinutes,configVersion,budgetReminders,researchBudgetMode,...execution } = config;
+  return identityFingerprint({...execution,...(budgetReminders === false?{budgetReminders:false}:{}),
+    ...(researchBudgetMode === 'staged'?{researchBudgetMode:'staged'}:{})});
 }
 const sessionPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 export async function route(request:Request, env:Env):Promise<Response> {
