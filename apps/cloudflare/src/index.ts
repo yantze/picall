@@ -7,6 +7,7 @@ import { normalize as validateRequest, openAIModel } from '../../../packages/cor
 import { identityFingerprint } from '../../../packages/core/identity.js';
 import { inspectAnswer } from '../../../packages/core/results.js';
 import { runFailure, errorEnvelope } from '../../../packages/core/errors.js';
+import { createTelemetry, timingSnapshot } from '../../../packages/core/telemetry.js';
 import { managementRoute } from './web';
 import { routeAPI } from './http';
 export { Management };
@@ -49,6 +50,7 @@ type Run = {
   usage?: any;
   elapsed_ms?: number;
   service_calls?: Record<string, number>;
+  timings?: ReturnType<typeof timingSnapshot>;
   nextHashes?: string[];
   version?: number; configHash?: string; updatedAt?: number; cancelRequested?: boolean; abortError?: { code:string };
 };
@@ -118,7 +120,8 @@ export class SearchSession extends DurableObject<Env> {
       this.executionConfig = config;
       this.modelRuntime = configuredRuntime(this.env, config, () => this.guard());
       this.web.env = { ...this.web.env, ...toolEnv(config) };
-      this.registry = this.web.registry({ enabled:config.enableResearch, overrides:config.toolOverrides, guard:() => this.guard() });
+      const telemetry=createTelemetry(this.web,{reminders:config.enableResearch && config.budgetReminders !== false,emit:event=>console.log(JSON.stringify(event))});
+      this.registry = this.web.registry({ enabled:config.enableResearch, overrides:config.toolOverrides, guard:() => this.guard(),telemetry });
       const pi = await Harness.open(storage, { models:this.modelRuntime!.models, registry:this.registry, onWake,
         settings:{ retry:{enabled:true,maxRetries:2,baseDelayMs:1000,maxAgentDelayMs:10000}, restartLimit:5, afterFailedRun:'withdraw' },
       }, context);
@@ -136,6 +139,7 @@ export class SearchSession extends DurableObject<Env> {
           } else {
             await (await pi.root(BG)).abort(BG);
             run.status = code === 'request_cancelled' ? 'cancelled' : 'failed'; run.error = {code}; run.updatedAt=Date.now();
+            run.timings=timingSnapshot(await this.ctx.storage.get('timings:' + run.id),true);
             await this.ctx.storage.transaction(async tx => { await tx.put('run:' + run.id, run); await tx.delete('active'); await tx.put('retired',true); });
           }
         }
@@ -255,6 +259,7 @@ export class SearchSession extends DurableObject<Env> {
         return await this.locked(async () => {
           const run = await this.ctx.storage.get<Run>('run:' + id);
           if (!run) fail('run_not_found', 404);
+          if(isPending(run))run.timings=timingSnapshot(await this.ctx.storage.get('timings:' + id));
           await this.touch();
           return json(run);
         });
@@ -379,6 +384,7 @@ export class SearchSession extends DurableObject<Env> {
     run.service_calls =
       (await this.ctx.storage.get<Record<string, number>>('calls:' + run.id)) ||
       {};
+    run.timings=timingSnapshot(await this.ctx.storage.get('timings:' + run.id),true);
     if (run.status === 'succeeded') {
       run.completion = completion(
         run.id,
@@ -422,7 +428,7 @@ export class SearchSession extends DurableObject<Env> {
             if (isPending(run)) continue;
             const expiry = (run.updatedAt || run.created) + TTL;
             if (expiry > Date.now()) { next = Math.min(next, expiry); continue; }
-            await this.ctx.storage.delete([key, 'calls:' + run.id]);
+            await this.ctx.storage.delete([key, 'calls:' + run.id, 'timings:' + run.id]);
             for (const family of ['cache', 'content', 'search']) {
               while (true) {
                 const keys = [...(await this.ctx.storage.list({ prefix:family + ':' + run.id + ':', limit:8 })).keys()];
@@ -480,6 +486,7 @@ export function publicRun(run: Run) {
     ...(run.completion && typeof run.completion==='object' ? {completion:run.completion}:{}),
     ...(code ? {error:runFailure(code)}:{}),
     ...(run.usage?{usage:run.usage}:{}), ...(run.elapsed_ms===undefined?{}:{elapsed_ms:run.elapsed_ms}), ...(run.service_calls?{service_calls:run.service_calls}:{}),
+    ...(run.timings?{timings:run.timings}:{}),
   };
 }
 export function toolEnv(config: CloudConfig) {
@@ -487,8 +494,8 @@ export function toolEnv(config: CloudConfig) {
     BRAVE_BASE_URL:config.braveBaseUrl,TAVILY_BASE_URL:config.tavilyBaseUrl,HTTP_TOOLS:JSON.stringify(config.httpTools) };
 }
 export async function executionFingerprint(config: CloudConfig) {
-  const { apiKey,host,port,maxSessions,idleTimeoutMinutes,configVersion,...execution } = config;
-  return identityFingerprint(execution);
+  const { apiKey,host,port,maxSessions,idleTimeoutMinutes,configVersion,budgetReminders,...execution } = config;
+  return identityFingerprint({...execution,...(budgetReminders === false?{budgetReminders:false}:{})});
 }
 const sessionPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 export async function route(request:Request, env:Env):Promise<Response> {

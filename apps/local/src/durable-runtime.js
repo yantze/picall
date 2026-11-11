@@ -12,12 +12,14 @@ import { usageDelta, inspectAnswer, completion as makeCompletion } from '../../.
 import { appError } from './config.js';
 import { RUN_ERRORS as errors, runFailure as failure } from '../../../packages/core/errors.js';
 import { continueHistory } from '../../../packages/core/history.js';
+import { createTelemetry, timingSnapshot } from '../../../packages/core/telemetry.js';
 
 const copy = value => JSON.parse(JSON.stringify(value));
 const definition = (kind, initial) => ({ kind, version: 1, scope: 'session', initial, checkpointWhen: () => true });
 const SessionDoc = defineDoc(definition('picall.session', () => ({ hashes: [], count: 0, system: '', model: '' })));
 const RunDoc = defineDocFamily({ ...definition('picall.run', seed => seed), family: true });
 const CacheDoc = defineDocFamily({ ...definition('picall.web', () => ({ data: {} })), family: true });
+const TimingDoc = defineDocFamily({ ...definition('picall.timings', () => ({ data: {} })), family: true });
 const safeError = error => errors[error?.code] ? failure(error.code) : error?.status >= 400 && error.status < 500
   ? { code: error.code || 'invalid_request', status: error.status, message: String(error.message).slice(0, 1024) } : failure('storage_error');
 const text = content => typeof content === 'string' ? content : content.map(part => part.text).join('\n');
@@ -153,16 +155,19 @@ export class DurableRuntime {
     const store = {
       get: async key => {
         const id = key.split(':')[1];
-        const cache = await handle.harness.snapshot(CacheDoc, id, BG);
+        const cache = await handle.harness.snapshot(key.startsWith('timings:')?TimingDoc:CacheDoc, id, BG);
         return cache?.data[key];
       },
       put: async (key, value) => {
         const id = key.split(':')[1];
-        await handle.harness.commit(async tx => { (await tx.doc(CacheDoc, id, null)).data[key] = copy(value); }, BG);
+        await handle.harness.commit(async tx => { (await tx.doc(key.startsWith('timings:')?TimingDoc:CacheDoc, id, null)).data[key] = copy(value); }, BG);
       },
     };
     const research = createResearchTools(config, { store, scope: async () => { guard(); return { id: handle.active.id, deadline: handle.active.deadline }; }, ...(this.net ? { fetch: this.net } : {}) });
+    handle.telemetry = createTelemetry(research.web,{reminders:config.enableResearch && config.budgetReminders !== false,
+      emit:event=>this.logger?.log(event.event.endsWith('finished')?'info':'debug','Research timing.',event)});
     const registry = researchRegistry(research.web, {
+      telemetry:handle.telemetry,
       enabled: config.enableResearch, overrides: config.toolOverrides, extensionName: 'picall-research', sectionKey: 'research', guard,
       observe: async (phase, tool, code) => {
         if (phase === 'start') await this.checkpoint('tool-start', handle.active.id);
@@ -272,6 +277,8 @@ export class DurableRuntime {
     if (handle) {
       const cache = await handle.harness.snapshot(CacheDoc, id, BG);
       run.service_calls = cache?.data[`calls:${id}`] || {};
+      const timing=await handle.harness.snapshot(TimingDoc,id,BG);
+      run.timings = timingSnapshot(timing?.data[`timings:${id}`],true);
       const data = await handle.harness.snapshot(RunDoc, id, BG);
       if (data?.before) run.usage = completion?.usage || usageDelta(data.before, await handle.harness.snapshot(UsageDoc, handle.root.id, BG));
     }
@@ -286,7 +293,15 @@ export class DurableRuntime {
     this.notify(id, publicRun(run));
     return publicRun(run);
   }
-  async get(id) { await this.open(); if (!runPattern.test(id) || !this.index.get(id)) throw appError('Task not found.', 404, 'run_not_found'); return publicRun(this.index.get(id)); }
+  async get(id) {
+    await this.open(); if (!runPattern.test(id) || !this.index.get(id)) throw appError('Task not found.', 404, 'run_not_found');
+    const run=this.index.get(id),handle=this.handles.get(run.sessionId);
+    if(!terminal(run) && handle) {
+      const cache=await handle.harness.snapshot(TimingDoc,id,BG);
+      run.timings=timingSnapshot(cache?.data[`timings:${id}`]);
+    }
+    return publicRun(run);
+  }
   async wait(id, { signal } = {}) {
     await this.open();
     signal?.throwIfAborted();

@@ -21,6 +21,7 @@ export async function assertAPIContract(request) {
   let done;const end=Date.now()+20000;
   do { done=await (await request('/v1/runs/'+first.id)).json();if(!['pending','running'].includes(done.status))break;await new Promise(resolve=>setTimeout(resolve,20)); } while(Date.now()<end);
   assert.equal(done.status,'completed',JSON.stringify(done));assert.ok(done.completion.choices[0].message.content);assert.ok(done.usage.total_tokens>0);
+  assert.ok(done.timings.model_requests>0);assert.ok(done.timings.tool_rounds>0);assert.ok(done.timings.model_ms>=0);
   assert.equal(done.session_id,undefined);assert.equal(done.created_at,undefined);
   const body={model:short,messages:[{role:'user',content:'RESEARCH'}],stream:true,stream_options:{include_usage:true}};
   const streamed=await request('/v1/chat/completions',{method:'POST',body});assert.equal(streamed.status,200);

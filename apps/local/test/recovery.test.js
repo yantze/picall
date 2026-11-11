@@ -44,12 +44,15 @@ test('SIGKILL while the model streams resumes without returning partial assistan
   const f=await environment(t);f.services.delay=5000;const first=await f.launch();
   const run=await first.call('submit',{input:completion('PING')});await until(()=>f.services.requests.length===1);await first.kill();f.services.delay=0;
   const second=await f.launch(),done=await second.call('wait',{id:run.id});assert.equal(done.status,'completed');assert.equal(done.completion.choices[0].message.content,'The final verified answer is 42.');assert.equal(f.services.requests.length,2);
+  assert.equal(done.timings.model_requests,2);assert.equal(done.timings.incomplete_model_requests,1);
+  assert.equal(done.timings.models[0].status,'interrupted');assert.equal(done.timings.models[0].elapsed_ms,undefined);
 });
 
 test('SIGKILL during a tool keeps completed search results and replays only the unfinished read',{timeout:30000},async t=>{
   const f=await environment(t);f.services.readerDelay=5000;const first=await f.launch();
   const run=await first.call('submit',{input:completion('RESEARCH')});await until(()=>f.services.reader===1);await first.kill();f.services.readerDelay=0;
   const second=await f.launch(),done=await second.call('wait',{id:run.id});assert.equal(done.status,'completed',JSON.stringify(done));assert.equal(f.services.search,1);assert.equal(f.services.reader,2);assert.equal(done.completion.usage.total_tokens,45);
+  assert.ok(JSON.stringify(f.services.requests.at(-1).messages).includes('RESEARCH BUDGET: 2/8'));
 });
 
 test('expired staged input is failed before any model request after restart',{timeout:30000},async t=>{

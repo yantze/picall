@@ -4,7 +4,7 @@ export { RequestKey, Management };
 export class SearchSession extends Base {
   async onRequest(request: Request) {
     const path = new URL(request.url).pathname;
-    if(path==='/test-snapshot')return Response.json({calls:await this.ctx.storage.get('test:model-calls') || 0,active:await this.ctx.storage.get('active'),configHash:await this.ctx.storage.get('config-hash')});
+    if(path==='/test-snapshot')return Response.json({calls:await this.ctx.storage.get('test:model-calls') || 0,active:await this.ctx.storage.get('active'),configHash:await this.ctx.storage.get('config-hash'),budgets:await this.ctx.storage.get('test:budgets') || []});
     if (path === '/test-cancel-intent') {
       const id=await this.ctx.storage.get<string>('active');
       const run:any=await this.ctx.storage.get('run:' + id);
@@ -49,6 +49,9 @@ export class SearchSession extends Base {
       run: async (_model: string, input: any, options: any) => {
         await ctx.storage.put('test:model-calls',(await ctx.storage.get('test:model-calls') || 0)+1);
         const prompt = JSON.stringify(input.messages);
+        const budget=/RESEARCH BUDGET: (\d+)\/(\d+)/.exec(prompt);
+        const budgets=await ctx.storage.get('test:budgets') || [];
+        budgets.push(budget?Number(budget[1]):null);await ctx.storage.put('test:budgets',budgets);
         const delay =
           prompt.includes('heartbeat research') &&
           !input.messages.some((m: any) => m.role === 'tool')

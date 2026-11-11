@@ -2,12 +2,14 @@ import { createRegistry } from '@earendil-works/pi-durable';
 import { registrations, researchSystemPrompt } from '../tools/index.js';
 
 /** Register the same tools and schemas on Harness and PiHarness. */
-export function researchRegistry(web, { enabled = true, overrides = {}, guard = () => {}, extensionName = 'research', sectionKey = 'security', observe = () => {} } = {}) {
+export function researchRegistry(web, { enabled = true, overrides = {}, guard = () => {}, extensionName = 'research', sectionKey = 'security', observe = () => {}, telemetry = undefined } = {}) {
   const registry = createRegistry();
   registry.install({ name: extensionName,
+    hooks:telemetry?.hooks || [],
     tools: enabled ? registrations(web).filter(tool => overrides[tool.name] !== false).map(tool => ({ ...tool, replay: 'safe',
       async execute(args, _api, context) {
         await guard();
+        await telemetry?.toolStarted(_api,context);
         await observe('start', tool.name);
         try {
           const result = await tool.execute(args, context.abortSignal);

@@ -9,7 +9,7 @@ export const DEFAULTS = Object.freeze({
   additionalSystemPrompt: DEFAULT_ADDITIONAL_SYSTEM_PROMPT,
   modelBaseUrl: 'https://api.deepseek.com/v1', modelApiKey: '', defaultModel: 'deepseek-flash',
   modelContextWindow: 131072, modelMaxTokens: 8192,
-  enableResearch: true, maxToolRounds: 8,
+  enableResearch: true, maxToolRounds: 8, budgetReminders:true,
   braveApiKey: '', tavilyApiKey: '', tinyfishApiKey: '', exaApiKey: '', jinaApiKey: '',
   braveBaseUrl: 'https://brave.vastiny.com/res/v1', tavilyBaseUrl: 'https://tavily.vastiny.com',
   httpTools: Object.freeze([]),
@@ -60,6 +60,7 @@ export function validate(values) {
   }
   if (values.modelMaxTokens > values.modelContextWindow) throw appError('modelMaxTokens must not exceed modelContextWindow.');
   if (typeof values.enableResearch !== 'boolean') throw appError('enableResearch must be a boolean.');
+  if (typeof values.budgetReminders !== 'boolean') throw appError('budgetReminders must be a boolean.');
   if (!Array.isArray(values.httpTools) || values.httpTools.length > 32 || byteLength(JSON.stringify(values.httpTools)) > 65536) throw appError('httpTools must be an array of at most 32 tools and 64 KiB.');
   const names = new Set(['web_search', 'fetch_content', 'get_search_content']);
   for (const tool of values.httpTools) {

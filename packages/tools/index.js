@@ -127,6 +127,7 @@ class WebTools {
   store;
   scope;
   net;
+  observe = async (_runId, _event) => {};
   counting = Promise.resolve();
   inFlight = /* @__PURE__ */ new Map();
   async measured(tool, signal, execute) {
@@ -141,6 +142,7 @@ class WebTools {
       });
       signal?.throwIfAborted();
       if (Date.now() >= run.deadline) fail("deadline_exceeded", 504);
+      await this.observe(run.id,{event:'tool_finished',tool,elapsed_ms:Date.now()-started,cache_hit,success:true});
       console.log(
         JSON.stringify({
           event: "tool_finished",
@@ -154,6 +156,7 @@ class WebTools {
       );
       return result;
     } catch (e) {
+      await this.observe(run.id,{event:'tool_finished',tool,elapsed_ms:Date.now()-started,cache_hit,success:false});
       console.log(
         JSON.stringify({
           event: "tool_finished",
@@ -226,6 +229,12 @@ class WebTools {
     );
     const joined = signal ? AbortSignal.any([signal, timer]) : timer;
     const started = Date.now();
+    let headers_ms = 0, finished = false;
+    const complete = async success => {
+      if (finished) return;
+      finished = true;
+      await this.observe(run.id,{event:'provider_finished',provider:service,headers_ms,elapsed_ms:Date.now()-started,success});
+    };
     const problem = (code, status, reason, upstream_status) => {
       const details = {
         provider: service,
@@ -251,6 +260,7 @@ class WebTools {
         redirect: "manual",
         signal: joined
       });
+      headers_ms = Date.now() - started;
       console.log(
         JSON.stringify({
           event: "tool_request_headers",
@@ -261,6 +271,7 @@ class WebTools {
         })
       );
     } catch {
+      await complete(false);
       signal?.throwIfAborted();
       if (Date.now() >= run.deadline) fail("deadline_exceeded", 504);
       throw problem(
@@ -271,10 +282,12 @@ class WebTools {
     }
     if ([401, 403].includes(response.status)) {
       await response.body?.cancel();
+      await complete(false);
       throw problem("provider_credentials", 502, "http", response.status);
     }
     if (!response.ok && !(response.status >= 300 && response.status < 400)) {
       await response.body?.cancel();
+      await complete(false);
       throw problem(
         retryable(response.status) ? "provider_unavailable" : "provider_request_error",
         retryable(response.status) ? 503 : 502,
@@ -282,7 +295,22 @@ class WebTools {
         response.status
       );
     }
-    return response;
+    if (!response.body) { await complete(true); return response; }
+    const reader = response.body.getReader();
+    const body = new ReadableStream({
+      async pull(controller) {
+        try {
+          const value = await reader.read();
+          if (value.done) { await complete(true); controller.close(); }
+          else controller.enqueue(value.value);
+        } catch (error) { await complete(false); controller.error(error); }
+      },
+      async cancel(reason) {
+        try { await reader.cancel(reason); }
+        finally { await complete(response.status >= 300 && response.status < 400); }
+      },
+    });
+    return new Response(body,{status:response.status,statusText:response.statusText,headers:response.headers});
   }
   async search(args, signal) {
     return this.measured("web_search", signal, async (run, hit) => {

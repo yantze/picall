@@ -142,6 +142,8 @@ test("a slow Jina body cannot block a complete fallback and only the winner is c
     }
     return Response.json({ results: [{ text: 'Complete fallback source' }] });
   });
+  const observations = [];
+  web.observe = async (runId, event) => observations.push({ runId, ...event });
   const pending = web.content('https://example.com/slow');
   await ready;
   t.mock.timers.tick(1999);
@@ -151,6 +153,11 @@ test("a slow Jina body cannot block a complete fallback and only the winner is c
   assert.equal(result.provider, 'tinyfish_fetch');
   assert.equal(result.text, 'Complete fallback source');
   assert.equal(jinaAborted, true);
+  const providers = observations.filter(event => event.event === 'provider_finished');
+  assert.deepEqual(providers.map(event => [event.provider, event.success]).sort(),
+    [['jina', false], ['tinyfish_fetch', true]]);
+  assert.ok(providers.every(event => event.runId === 'run' && event.elapsed_ms >= event.headers_ms));
+  assert.equal(observations.filter(event => event.event === 'tool_finished').length, 1);
   assert.deepEqual(map.get('calls:run'), { jina: 1, tinyfish_fetch: 1 });
   assert.equal([...map.keys()].filter(key => key.startsWith('content:')).length, 1);
   assert.equal((await web.content('https://example.com/slow')).content_id, result.content_id);
@@ -190,6 +197,8 @@ test("cancelling hedged content aborts every active reader and writes no cache",
     if (signals.length === 1) firstStarted(); else secondStarted();
     await new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true }));
   });
+  const observations = [];
+  web.observe = async (runId, event) => observations.push({ runId, ...event });
   const controller = new AbortController();
   const rejected = assert.rejects(web.content('https://example.com/cancel', controller.signal), { name: 'AbortError' });
   await first;
@@ -197,6 +206,11 @@ test("cancelling hedged content aborts every active reader and writes no cache",
   await second;
   controller.abort();
   await rejected;
+  // Cancellation unwinds the owned reads; no successful response was observed.
+  await new Promise(resolve => setImmediate(resolve));
+  const providers = observations.filter(event => event.event === 'provider_finished');
+  assert.equal(providers.length, 2);
+  assert.ok(providers.every(event => event.runId === 'run' && event.success === false));
   assert.ok(signals.every(signal => signal.aborted));
   t.mock.timers.tick(10000);
   assert.equal(signals.length, 2);

@@ -10,7 +10,7 @@ import { canonical } from '../../../packages/core/identity.js';
 export { canonical } from '../../../packages/core/identity.js';
 export const fingerprint = input => digest(JSON.stringify(canonical(input)));
 export const publicRun = run => structuredClone(Object.fromEntries(Object.entries(run).filter(([key]) =>
-  ['id', 'sessionId', 'status', 'createdAt', 'updatedAt', 'model', 'completion', 'error', 'elapsed_ms', 'service_calls', 'usage'].includes(key))));
+  ['id', 'sessionId', 'status', 'createdAt', 'updatedAt', 'model', 'completion', 'error', 'elapsed_ms', 'service_calls', 'usage', 'timings'].includes(key))));
 export const sessionPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 export const runPattern = /^[A-Za-z0-9][A-Za-z0-9._~-]{0,199}$/;
 const TTL = 7 * 86400000;

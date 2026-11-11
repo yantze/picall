@@ -8,7 +8,7 @@ export type CloudConfig = {
   host:string;port:number;configVersion:number;apiKey:string;maxSessions:number;idleTimeoutMinutes:number;
   requestTimeoutSeconds:number;toolOverrides:Record<string,boolean>;additionalSystemPrompt:string;
   modelBaseUrl:string;modelApiKey:string;defaultModel:string;modelContextWindow:number;modelMaxTokens:number;
-  enableResearch:boolean;maxToolRounds:number;braveApiKey:string;tavilyApiKey:string;tinyfishApiKey:string;exaApiKey:string;jinaApiKey:string;
+  enableResearch:boolean;maxToolRounds:number;budgetReminders:boolean;braveApiKey:string;tavilyApiKey:string;tinyfishApiKey:string;exaApiKey:string;jinaApiKey:string;
   braveBaseUrl:string;tavilyBaseUrl:string;httpTools:{name:string;description:string;url:string;parameters:Record<string,Json>}[];
   modelProvider:string;aiGatewayId:string;byokAlias:string;
 };
@@ -69,7 +69,7 @@ export class Management extends DurableObject<Env> {
   }
   private async read(): Promise<{ config: CloudConfig; revision: number }> {
     const saved = await this.ctx.storage.get<{ sealed:Sealed; revision:number }>('config');
-    if (saved) return { config:await this.unseal(saved.sealed), revision:saved.revision };
+    if (saved) return { config:{...DEFAULTS,...await this.unseal(saved.sealed)}, revision:saved.revision };
     const config: CloudConfig = { ...DEFAULTS,
       apiKey:this.env.API_BEARER || '', defaultModel:this.env.MODEL || 'deepseek-flash',
       modelProvider:this.env.MODEL?.startsWith('@cf/') ? 'workers-ai' : 'cloudflare-ai-gateway',

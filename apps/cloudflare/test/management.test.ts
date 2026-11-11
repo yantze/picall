@@ -67,3 +67,15 @@ test('late admission metadata cannot replace a completed result or regress manag
   const logs:any=await(await manage(f.mf,cookie,'/api/logs')).json();assert.equal(logs.logs.length,1);assert.equal(logs.logs[0].message,'Task completed.');
   assert.equal(JSON.stringify(logs).includes('must-not-be-indexed'),false);
 });
+test('budget reminders use durable rounds on Workers AI and can be disabled without disabling measurement',async t=>{
+  const f=await fixture(t),cookie=await login(f.mf);
+  const first:any=await(await req(f.mf,'/v1/runs',{prompt:'research'})).json();
+  const done=await settled(f.mf,first.id);assert.equal(done.timings.model_requests,4);assert.equal(done.timings.tool_rounds,3);
+  const ns=await f.mf.getDurableObjectNamespace('SESSIONS');
+  const snapshot:any=await(await ns.get(ns.idFromName(first.sessionId)).fetch('https://internal/test-snapshot')).json();assert.deepEqual(snapshot.budgets,[0,1,2,3]);
+  const config:any=await(await manage(f.mf,cookie,'/api/config')).json();
+  assert.equal((await manage(f.mf,cookie,'/api/config',{revision:config.revision,budgetReminders:false})).status,200);
+  const second:any=await(await req(f.mf,'/v1/runs',{prompt:'research'})).json(),baseline=await settled(f.mf,second.id);
+  assert.equal(baseline.timings.budget_reminders,false);assert.equal(baseline.timings.model_requests,4);
+  const plain:any=await(await ns.get(ns.idFromName(second.sessionId)).fetch('https://internal/test-snapshot')).json();assert.deepEqual(plain.budgets,[null,null,null,null]);
+});

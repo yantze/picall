@@ -112,6 +112,7 @@ function applyConfig(config) {
   $('model-context-window').value = config.modelContextWindow ?? 131072;
   $('model-max-tokens').value = config.modelMaxTokens ?? 8192;
   $('enable-research').checked = config.enableResearch !== false;
+  $('budget-reminders').checked = config.budgetReminders !== false;
   $('brave-base-url').value = config.braveBaseUrl ?? 'https://brave.vastiny.com/res/v1';
   $('tavily-base-url').value = config.tavilyBaseUrl ?? 'https://tavily.vastiny.com';
   $('max-tool-rounds').value = config.maxToolRounds ?? 8;
@@ -434,6 +435,7 @@ async function saveConfig(event) {
     modelContextWindow: Number($('model-context-window').value),
     modelMaxTokens: Number($('model-max-tokens').value),
     enableResearch: $('enable-research').checked,
+    budgetReminders:$('budget-reminders').checked,
     braveBaseUrl: $('brave-base-url').value.trim(),
     tavilyBaseUrl: $('tavily-base-url').value.trim(),
     maxToolRounds: Number($('max-tool-rounds').value),
@@ -642,6 +644,7 @@ async function runPrompt(event) {
   $('stop-button').hidden = false;
   $('response-output').textContent = '';
   $('response-meta').textContent = '正在连接 Pi…';
+  renderTimings();
   const headers = { 'Content-Type': 'application/json' };
 
   active.headers = headers;
@@ -826,10 +829,23 @@ $('run-query-form').addEventListener('submit', async event => {
     $('response-box').hidden = false;
     $('response-output').textContent = run.completion?.choices?.[0]?.message?.content || run.error?.message || '';
     $('response-meta').textContent = `${({pending:'已持久受理',running:'执行中，可稍后查询',completed:'完成',failed:'失败',cancelled:'已取消'})[run.status] || run.status} · ${run.id}`;
+    renderTimings(run.timings);
   } catch (error) { toast(error.message, true); }
 });
+function renderTimings(timings) {
+  $('timing-panel').hidden=!timings;
+  const list=$('timing-list');list.replaceChildren();
+  if(!timings)return;
+  const seconds=value=>(Number(value || 0)/1000).toFixed(2)+'s';
+  const row=(label,value)=>{const box=document.createElement('div'),term=document.createElement('dt'),description=document.createElement('dd');term.textContent=label;description.textContent=value;box.append(term,description);list.append(box);};
+  row('模型请求',`${timings.model_requests} 次 · 已记录 ${seconds(timings.model_ms)}`);
+  row('工具轮次',`${timings.tool_rounds} / ${timings.hard_limit || '—'}`);
+  if(timings.incomplete_model_requests)row('未完整观测',`${timings.incomplete_model_requests} 次模型请求`);
+  for(const [name,value] of Object.entries(timings.providers || {}))row(name,`${value.completed_requests} 次 · 响应头 ${seconds(value.headers_ms)} · 完整响应 ${seconds(value.elapsed_ms)}`);
+}
 try { $('run-query-id').value = localStorage.getItem('picall.lastRunId') || ''; } catch { /* Storage may be disabled. */ }
 $('new-session').addEventListener('click', () => {
+  renderTimings();
   state.sessionId = null;
   state.toolRun = null;
   renderToolRun();

@@ -40,6 +40,8 @@ try {
   await runtime.wait(id);
   await page.locator('#run-query-id').fill(id);await page.locator('#run-query-form button').click();
   await page.waitForFunction(()=>document.querySelector('#response-meta').textContent.startsWith('完成'));
+  assert.equal(await page.locator('#timing-panel').isVisible(),true);
+  await page.locator('#timing-panel summary').click();assert.match(await page.locator('#timing-list').textContent(),/模型请求/);
   await page.setViewportSize({width:390,height:844});
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
   await page.screenshot({path:'test-results/local-mobile.png',fullPage:true});
@@ -57,8 +59,10 @@ try {
   assert.equal(await cloud.locator('#login-panel').isVisible(),false);
   assert.equal(await cloud.locator('#logout-button').isVisible(),true);
   await cloud.locator('[data-view="settings"]').click();await cloud.locator('#settings-tab-research').click();
+  await cloud.locator('#budget-reminders').uncheck();
   await cloud.locator('#brave-api-key').fill('browser-search-secret-canary');await cloud.locator('#save-button').click();
   await cloud.waitForFunction(()=>document.querySelector('#toast').textContent.includes('设置已保存'));assert.equal(await cloud.locator('#brave-api-key').inputValue(),'');
+  assert.equal(await cloud.locator('#budget-reminders').isChecked(),false);
   await cloud.locator('[data-view="overview"]').click();await cloud.locator('#prompt').fill('research');await cloud.locator('#run-button').click();
   await cloud.waitForFunction(()=>document.querySelector('#response-meta').textContent.startsWith('完成'));
   assert.match(await cloud.locator('#response-output').textContent(),/Final answer/);
