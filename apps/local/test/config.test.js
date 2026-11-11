@@ -79,7 +79,7 @@ test('gateway, research and custom HTTP configuration survives restart without a
   const patch = {
     modelBaseUrl: 'http://localhost:1234/v1', modelApiKey: 'private-model-canary', defaultModel: 'local-model',
     modelContextWindow: 65536, modelMaxTokens: 4096,
-    braveBaseUrl: 'https://brave.vastiny.com/res/v1', tavilyBaseUrl: 'https://tavily.vastiny.com',
+    braveBaseUrl: 'https://api.search.brave.com/res/v1', tavilyBaseUrl: 'https://api.tavily.com',
     braveApiKey: 'private-search-canary', enableResearch: true, maxToolRounds: 8,
     httpTools: [httpTool],
   };

@@ -18,8 +18,11 @@ npm start
 打开 **http://127.0.0.1:8787**，进入「服务设置」：
 
 1. 「模型网关」填写 OpenAI 兼容 Base URL、模型 API Key 和模型 ID。默认模型 `deepseek-flash`，默认地址 `https://api.deepseek.com/v1`；自建网关填写它提供的兼容地址和对应密钥。Base URL 不含 `/chat/completions`。模型需要支持工具调用和上游 SSE。
-2. 「搜索与网页」填写搜索服务 key。默认 Brave 地址 `https://brave.vastiny.com/res/v1`、Tavily 地址 `https://tavily.vastiny.com`；可改为官方或兼容服务地址，key 必须属于所填写的服务。
+2. 「搜索与网页」填写搜索服务 key。默认 Brave 地址 `https://api.search.brave.com/res/v1`、Tavily 地址 `https://api.tavily.com`；可改为官方或兼容服务地址，key 必须属于所填写的服务。
+
 3. 保存并新建会话。模型目录显示 `picall/<模型 ID>`，API 也接受短名或省略 model 使用默认值。
+
+升级不会覆盖已保存的自定义 Base URL。已有安装若使用旧反代，请在网页设置中将 Brave、Tavily 改为上述官方地址，并配置对应官方服务的 key；云端已保存的管理配置也需按此更新。
 
 「接口 API Key」保护本地 `/v1/*`，与模型、搜索服务的密钥独立。密钥输入留空保留原值，点击清除后保存才删除。GET 配置只返回设置状态和尾码；短密钥完全遮盖。密钥不写入浏览器存储。
 

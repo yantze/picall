@@ -13,8 +13,8 @@ const env = {
   TAVILY_KEY: "t",
   TINYFISH_KEY: "f",
   EXA_KEY: "e",
-  BRAVE_BASE_URL: "https://brave.vastiny.com/res/v1",
-  TAVILY_BASE_URL: "https://tavily.vastiny.com",
+  BRAVE_BASE_URL: "https://api.search.brave.com/res/v1",
+  TAVILY_BASE_URL: "https://api.tavily.com",
   HTTP_TOOLS: "[]"
 };
 function setup(net, extra = {}) {
@@ -44,6 +44,9 @@ test("search follows Brave -> Tavily -> TinyFish and correct auth/contracts", as
   });
   const result = await web.search({ query: "q", page: 1 });
   assert.equal(result.provider, "tinyfish");
+  assert.equal(new URL(calls[0][0]).origin + new URL(calls[0][0]).pathname,
+    "https://api.search.brave.com/res/v1/web/search");
+  assert.equal(calls[1][0], "https://api.tavily.com/search");
   assert.equal(new URL(calls[2][0]).searchParams.get("query"), "q");
   assert.equal(calls[0][1].headers["X-Subscription-Token"], "b");
   assert.equal(calls[1][1].headers.Authorization, "Bearer t");
@@ -750,7 +753,7 @@ test('local factory registers JSON-schema tools and preserves per-prompt isolati
     fetch: async (url, init) => {
       calls++;
       assert.equal(init.headers['X-Subscription-Token'], 'local-secret');
-      assert.equal(new URL(url).origin, 'https://brave.vastiny.com');
+      assert.equal(new URL(url).origin, 'https://api.search.brave.com');
       return Response.json({ web: { results: [{ title: 'Forecast', url: 'https://example.com/weather', description: 'Rain' }] } });
     },
   });

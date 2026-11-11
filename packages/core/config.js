@@ -11,7 +11,7 @@ export const DEFAULTS = Object.freeze({
   modelContextWindow: 131072, modelMaxTokens: 8192,
   enableResearch: true, maxToolRounds: 8, budgetReminders:true, researchBudgetMode:'fixed',
   braveApiKey: '', tavilyApiKey: '', tinyfishApiKey: '', exaApiKey: '', jinaApiKey: '',
-  braveBaseUrl: 'https://brave.vastiny.com/res/v1', tavilyBaseUrl: 'https://tavily.vastiny.com',
+  braveBaseUrl: 'https://api.search.brave.com/res/v1', tavilyBaseUrl: 'https://api.tavily.com',
   httpTools: Object.freeze([]),
 });
 

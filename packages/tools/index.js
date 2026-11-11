@@ -792,8 +792,8 @@ export function createResearchTools(config = {}, options = {}) {
     TINYFISH_KEY: config.tinyfishApiKey,
     EXA_KEY: config.exaApiKey,
     JINA_KEY: config.jinaApiKey,
-    BRAVE_BASE_URL: config.braveBaseUrl || 'https://brave.vastiny.com/res/v1',
-    TAVILY_BASE_URL: config.tavilyBaseUrl || 'https://tavily.vastiny.com',
+    BRAVE_BASE_URL: config.braveBaseUrl || 'https://api.search.brave.com/res/v1',
+    TAVILY_BASE_URL: config.tavilyBaseUrl || 'https://api.tavily.com',
     HTTP_TOOLS: JSON.stringify(config.httpTools || []),
   };
   const web = new WebTools(env, store, scope, options.fetch || globalThis.fetch);

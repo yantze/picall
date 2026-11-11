@@ -42,8 +42,8 @@
   "vars": {
     "MODEL": "deepseek-flash",
     "AI_GATEWAY_ID": "deepseek",
-    "BRAVE_BASE_URL": "https://brave.vastiny.com/res/v1",
-    "TAVILY_BASE_URL": "https://tavily.vastiny.com",
+    "BRAVE_BASE_URL": "https://api.search.brave.com/res/v1",
+    "TAVILY_BASE_URL": "https://api.tavily.com",
     "HTTP_TOOLS": "[]"
   },
   "observability": {

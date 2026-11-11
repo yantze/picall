@@ -114,8 +114,8 @@ function applyConfig(config) {
   $('enable-research').checked = config.enableResearch !== false;
   $('budget-reminders').checked = config.budgetReminders !== false;
   $('research-budget-mode').value = config.researchBudgetMode || 'fixed';
-  $('brave-base-url').value = config.braveBaseUrl ?? 'https://brave.vastiny.com/res/v1';
-  $('tavily-base-url').value = config.tavilyBaseUrl ?? 'https://tavily.vastiny.com';
+  $('brave-base-url').value = config.braveBaseUrl ?? 'https://api.search.brave.com/res/v1';
+  $('tavily-base-url').value = config.tavilyBaseUrl ?? 'https://api.tavily.com';
   $('max-tool-rounds').value = config.maxToolRounds ?? 8;
   $('request-timeout').value = config.requestTimeoutSeconds ?? 300;
   $('http-tools').value = JSON.stringify(config.httpTools ?? [], null, 2);
