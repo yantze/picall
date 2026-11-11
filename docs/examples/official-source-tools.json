@@ -1,0 +1,35 @@
+{
+  "additionalSystemPrompt": "按问题复杂度使用工具：简单事实优先一次搜索和一个权威来源，证据充分后立即回答；复杂研究按需补查。\n优先使用直接覆盖问题的官方专用只读工具。新加坡今天的天气：可同轮调用两小时和24小时预报工具，按新加坡当前日期核查更新时间和有效期，区分短期预报与跨日预报，不要虚构实时观测。Google AI Studio 的项目/API key 归属或导入问题：优先读取 google_ai_project_docs，区分账号、Cloud 项目、API key 与 Build 应用；直接回答最可能含义并说明歧义。专用来源缺失、过期或不支持结论时才补充搜索。证据充分立即收尾，通常150–300中文字加必要来源，不为确认已知结论重复读取。\n正确性约束：多云预报不保证不下雨，不能据此说不用担心下雨或明天才需要雨具；不得把预报称为实时观测。不要无依据说项目导入数量不限，不要把页面显示上限当作导入硬上限；若未核查 Build 应用部署规则，明确本回答仅指 Projects/API key，不要推断 Build 绑定关系。只给直接相关结论，最多3个要点加来源，不主动扩展湿度、风、计费或应用部署细节。",
+  "httpTools": [
+    {
+      "name": "singapore_weather_2h",
+      "description": "Read Singapore official latest two-hour regional weather forecast JSON, including update timestamp and valid period. Source: https://api-open.data.gov.sg/v2/real-time/api/two-hr-forecast . No arguments.",
+      "url": "https://api-open.data.gov.sg/v2/real-time/api/two-hr-forecast",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "singapore_weather_24h",
+      "description": "Read Singapore official latest 24-hour forecast JSON: temperature range, timestamps, validity and regional periods. May span tomorrow; forecast is not current observation. Source: https://api-open.data.gov.sg/v2/real-time/api/twenty-four-hr-forecast . No arguments.",
+      "url": "https://api-open.data.gov.sg/v2/real-time/api/twenty-four-hr-forecast",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "google_ai_project_docs",
+      "description": "Read official Google Gemini API key documentation including Cloud projects, importing projects and IAM permissions. Source: https://aistudio.google.com/docs/api-key . No arguments.",
+      "url": "https://aistudio.google.com/docs/api-key",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    }
+  ]
+}
