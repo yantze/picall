@@ -2,6 +2,7 @@ import { Fault, fail, hash } from "./errors.js";
 const MAX_BYTES = 2 * 1024 * 1024;
 const FIRST_PAGE = 6e3;
 const STORED_PAGE = 4e3;
+const CONTENT_HEDGE_DELAY_MS = 2e3;
 function contentIssue(text) {
   const marker = text.indexOf("Markdown Content:");
   const envelope = marker >= 0 ? text.slice(0, marker) : "";
@@ -17,6 +18,7 @@ function contentIssue(text) {
   ))
     return "access_challenge";
   const body = (marker >= 0 ? text.slice(marker + "Markdown Content:".length) : text).replace(/<[^>]*>/g, " ").trim();
+  if (!body) return "empty_content";
   if (body.length <= 2e3 && /^(?:please verify (?:that )?you are (?:a )?human|verify you are human|checking your browser|enable javascript and cookies to continue|请(?:先)?(?:完成|进行)(?:人机|安全)验证|请输入验证码(?:以|后)(?:继续|访问)|access denied|403 forbidden)(?:[.!。:：\s]|$)/i.test(
     body
   ))
@@ -461,132 +463,161 @@ class WebTools {
     });
   }
   async contentFresh(u, run, signal) {
-    let text = "";
-    let provider = "";
+    // Prefer Jina, but do not let a slow reader block a usable fallback for
+    // 30 seconds (or TinyFish for 110 seconds). Only complete, validated bodies
+    // can win. The shared cache owns cancellation, so one departing caller
+    // cannot abort the other callers' reads.
+    const providers = ["jina", ...(this.env.TINYFISH_KEY ? ["tinyfish_fetch"] : []), "http"];
+    const controller = new AbortController();
+    const remaining = run.deadline - Date.now();
+    if (remaining <= 0) fail("deadline_exceeded", 504);
+    const joined = AbortSignal.any([signal, controller.signal, AbortSignal.timeout(remaining)]);
     const failures = [];
-    for (const p of ["jina", "tinyfish_fetch", "http"]) {
-      try {
-        let response;
-        if (p === "jina")
-          response = await this.request(
-            p,
-            "https://r.jina.ai/" + u.href,
-            {
-              headers: {
-                Accept: "text/plain",
-                ...this.env.JINA_KEY ? { Authorization: `Bearer ${this.env.JINA_KEY}` } : {}
-              }
-            },
-            signal
-          );
-        else if (p === "tinyfish_fetch") {
-          if (!this.env.TINYFISH_KEY) continue;
-          response = await this.request(
-            p,
-            "https://api.fetch.tinyfish.ai",
-            {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                "X-API-Key": this.env.TINYFISH_KEY
-              },
-              body: JSON.stringify({
-                urls: [u.href],
-                format: "markdown",
-                per_url_timeout_ms: Math.max(
-                  1,
-                  Math.min(11e4, (await this.scope()).deadline - Date.now())
-                )
-              })
-            },
-            signal
-          );
-        } else {
-          let target = u;
-          for (let n = 0; ; n++) {
-            response = await this.request(p, target.href, {}, signal);
-            if (response.status < 300 || response.status >= 400) break;
-            const location = response.headers.get("location");
-            await response.body?.cancel();
-            if (!location) fail("invalid_redirect", 502);
-            if (n >= 4) fail("too_many_redirects", 502);
-            target = parseWebURL(new URL(location, target).href);
+    const { text, provider } = await new Promise((resolve, reject) => {
+      let next = 0, active = 0, settled = false, timer;
+      const finish = (error, result) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        joined.removeEventListener("abort", abort);
+        controller.abort();
+        if (error) reject(error); else resolve(result);
+      };
+      const abort = () => finish(signal.aborted ? signal.reason : new Fault("deadline_exceeded", 504));
+      const launch = () => {
+        clearTimeout(timer);
+        if (settled || next === providers.length) return;
+        const index = next++, p = providers[index];
+        active++;
+        if (next < providers.length) timer = setTimeout(launch, CONTENT_HEDGE_DELAY_MS);
+        this.contentFromProvider(p, u, joined).then(
+          text => finish(null, { text, provider: p }),
+          error => {
+            if (settled) return;
+            if (joined.aborted) { abort(); return; }
+            active--;
+            if (error instanceof Fault && ![
+              "provider_unavailable", "provider_credentials", "provider_request_error", "unusable_content"
+            ].includes(error.code)) { finish(error); return; }
+            failures[index] = error instanceof Fault
+              ? { provider: p, code: error.code, ...error.details }
+              : { provider: p, code: "extraction_error" };
+            // A failed attempt needs no grace period before trying the next.
+            if (next < providers.length) launch();
+            else if (!active) finish(new Fault("content_unavailable", 502, { attempts: failures }));
           }
-        }
-        if (response.status >= 300)
-          throw new Fault("provider_unavailable", 503);
-        const type = response.headers.get("content-type") || "";
-        if (!/text\/|application\/(json|xhtml\+xml)/i.test(type)) {
-          await response.body?.cancel();
-          fail("unsupported_content_type", 502);
-        }
-        text = await boundedText(response);
-        if (p === "tinyfish_fetch") {
-          try {
-            const data = JSON.parse(text);
-            const row = data.results?.find((r) => r.url === u.href) || data.results?.[0];
-            if (row?.final_url) parseWebURL(row.final_url);
-            text = typeof row?.text === "string" ? row.text : "";
-          } catch (e) {
-            if (e instanceof Fault) throw e;
-            text = "";
-          }
-        }
-        const issue = contentIssue(text);
-        if (issue) {
-          console.log(
-            JSON.stringify({
-              event: "tool_content_rejected",
-              run_id: run.id,
-              provider: p,
-              reason: issue
-            })
-          );
-          throw new Fault("unusable_content", 502, {
-            provider: p,
-            reason: issue
-          });
-        }
-        if (p === "http" && /html/.test(type))
-          text = text.replace(/<(script|style|noscript)\b[^>]*>[\s\S]*?<\/\1>/gi, "").replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ");
-        if (!text.trim()) throw new Fault("provider_unavailable", 503);
-        provider = p;
-        break;
-      } catch (e) {
-        text = "";
-        signal?.throwIfAborted();
-        if (Date.now() >= (await this.scope()).deadline)
-          fail("deadline_exceeded", 504);
-        if (e instanceof Fault && ![
-          "provider_unavailable",
-          "provider_credentials",
-          "provider_request_error",
-          "unusable_content"
-        ].includes(e.code))
-          throw e;
-        failures.push(
-          e instanceof Fault ? { provider: p, code: e.code, ...e.details } : { provider: p, code: "extraction_error" }
         );
-      }
-    }
-    if (!provider)
-      throw new Fault("content_unavailable", 502, { attempts: failures });
+      };
+      joined.addEventListener("abort", abort, { once: true });
+      if (joined.aborted) abort(); else launch();
+    });
     signal.throwIfAborted();
     const id = crypto.randomUUID();
-    await this.store.put(`content:${run.id}:${id}`, {
-      url: u.href,
-      text,
-      provider
-    });
+    await this.store.put(`content:${run.id}:${id}`, { url: u.href, text, provider });
     const offset = previewOffset(text);
-    return {
-      content_id: id,
-      url: u.href,
-      provider,
-      text: text.slice(offset, offset + FIRST_PAGE),
-      offset,
-      length: text.length
-    };
+    return { content_id: id, url: u.href, provider, text: text.slice(offset, offset + FIRST_PAGE), offset, length: text.length };
+  }
+  async contentFromProvider(p, u, signal) {
+    let text = "";
+    const started = Date.now();
+    const run = await this.scope();
+    try {
+      let response;
+      if (p === "jina")
+        response = await this.request(
+          p,
+          "https://r.jina.ai/" + u.href,
+          {
+            headers: {
+              Accept: "text/plain",
+              "X-Proxy": "none",
+              ...this.env.JINA_KEY ? { Authorization: `Bearer ${this.env.JINA_KEY}` } : {}
+            }
+          },
+          signal
+        );
+      else if (p === "tinyfish_fetch") {
+        response = await this.request(
+          p,
+          "https://api.fetch.tinyfish.ai",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-API-Key": this.env.TINYFISH_KEY
+            },
+            body: JSON.stringify({
+              urls: [u.href],
+              format: "markdown",
+              per_url_timeout_ms: Math.max(
+                1,
+                Math.min(11e4, (await this.scope()).deadline - Date.now())
+              )
+            })
+          },
+          signal
+        );
+      } else {
+        let target = u;
+        for (let n = 0; ; n++) {
+          response = await this.request(p, target.href, {}, signal);
+          if (response.status < 300 || response.status >= 400) break;
+          const location = response.headers.get("location");
+          await response.body?.cancel();
+          if (!location) fail("invalid_redirect", 502);
+          if (n >= 4) fail("too_many_redirects", 502);
+          target = parseWebURL(new URL(location, target).href);
+        }
+      }
+      if (response.status >= 300)
+        throw new Fault("provider_unavailable", 503);
+      const type = response.headers.get("content-type") || "";
+      if (!/text\/|application\/(json|xhtml\+xml)/i.test(type)) {
+        await response.body?.cancel();
+        fail("unsupported_content_type", 502);
+      }
+      text = await boundedText(response);
+      if (p === "tinyfish_fetch") {
+        try {
+          const data = JSON.parse(text);
+          const row = data.results?.find((r) => r.url === u.href) || data.results?.[0];
+          if (row?.final_url) parseWebURL(row.final_url);
+          text = typeof row?.text === "string" ? row.text : "";
+        } catch (e) {
+          if (e instanceof Fault) throw e;
+          text = "";
+        }
+      }
+      const issue = contentIssue(text);
+      if (issue) {
+        console.log(
+          JSON.stringify({
+            event: "tool_content_rejected",
+            run_id: run.id,
+            provider: p,
+            reason: issue
+          })
+        );
+        throw new Fault("unusable_content", 502, {
+          provider: p,
+          reason: issue
+        });
+      }
+      if (p === "http" && /html/.test(type))
+        text = text.replace(/<(script|style|noscript)\b[^>]*>[\s\S]*?<\/\1>/gi, "").replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ");
+      if (!text.trim()) throw new Fault("provider_unavailable", 503);
+      signal.throwIfAborted();
+      console.log(JSON.stringify({ event: "tool_content_attempt_finished", run_id: run.id,
+        provider: p, elapsed_ms: Date.now() - started, success: true, returned_chars: text.length }));
+      return text;
+    } catch (e) {
+      signal?.throwIfAborted();
+      if (Date.now() >= (await this.scope()).deadline)
+        fail("deadline_exceeded", 504);
+      console.log(JSON.stringify({ event: "tool_content_attempt_finished", run_id: run.id,
+        provider: p, elapsed_ms: Date.now() - started, success: false, code: e instanceof Fault ? e.code : "extraction_error" }));
+      throw e;
+    }
   }
   async stored(args, signal) {
     return this.measured(
