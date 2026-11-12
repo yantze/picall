@@ -10,6 +10,7 @@ PiCall 把 **Pi Durable** 封装成一个 OpenAI 兼容的 LLM 接口服务，�
 
 | | Gemini 3.8 Flash Lite | DeepSeek Flash + Search（PiCall） |
 | --- | --- | --- |
+| 效果演示 | <img width="1500" height="948" alt="image" src="https://github.com/user-attachments/assets/36af4a48-59dd-48ff-a56b-1dce4754a685" /> | <img width="1500" height="948" alt="image" src="https://github.com/user-attachments/assets/7cd9e254-da78-4250-ba7d-aea9de6e34a6" /> |
 | 本次耗时 | 4 秒 | 约 6 秒 |
 | 回答结果 | 未识别项目，给出名称相关的猜测 | 获取仓库资料，准确介绍项目功能与部署方式 |
 
@@ -25,4 +26,4 @@ PiCall 把 **Pi Durable** 封装成一个 OpenAI 兼容的 LLM 接口服务，�
 npm run start
 ```
 
-打开 **http://127.0.0.1:8787**，在网页中配置模型网关与搜索服务的 API Key（Brave、Tavily、TinyFish 等），保存即可使用。默认模型为 `deepseek-flash`；在 Raycast 等客户端中，将 Base URL 填为 **http://127.0.0.1:8787/v1**。
+打开 http://127.0.0.1:8787，在网页中配置模型网关与搜索服务的 API Key（Brave、Tavily、TinyFish 等），保存即可使用。默认模型为 `deepseek-flash`；在 Raycast 等客户端中，将 Base URL 填为 http://127.0.0.1:8787/v1。
