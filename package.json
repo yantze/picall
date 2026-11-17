@@ -29,7 +29,7 @@
     "check": "npm run check:local && npm run check --workspace apps/cloudflare",
     "test:local": "node --import ./apps/local/test/isolate.mjs --test apps/local/test/*.test.js",
     "test:cloudflare": "npm test --workspace apps/cloudflare",
-    "check:local": "node --check bin/picall.js && node --check apps/local/src/server.js && node --check apps/local/src/durable-runtime.js && node --check packages/ui/app.js",
+    "check:local": "node --check bin/picall.js && node --check apps/local/src/server.js && node --check apps/local/src/durable-runtime.js && node --check apps/local/src/session-store.js && node --check packages/core/session-items.js && node --check packages/ui/app.js && node --check packages/ui/session.js",
     "build:cloudflare": "npm run build --workspace apps/cloudflare",
     "dev:cloudflare": "npm run dev --workspace apps/cloudflare",
     "test:tools": "node --test packages/tools/test/*.test.js",

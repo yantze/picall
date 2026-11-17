@@ -5,12 +5,16 @@ import { fileURLToPath } from 'node:url';
 import { appError } from './config.js';
 import { normalize, openAIModel } from '../../../packages/core/protocol.js';
 import { VERSION } from './version.js';
+import { itemPagination } from '../../../packages/core/session-items.js';
 
 const assets = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
   ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
   ['/styles.css', ['styles.css', 'text/css; charset=utf-8']],
+  ['/session.js', ['session.js', 'text/javascript; charset=utf-8']],
+  ['/session.css', ['session.css', 'text/css; charset=utf-8']],
 ]);
+const sessionPage = path => /^\/sessions\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(path);
 const publicDir = fileURLToPath(new URL('../../../packages/ui/', import.meta.url));
 
 function json(res, status, data) {
@@ -54,7 +58,7 @@ function opensManagementPage(req, path) {
   // Following a link from another site is a legitimate entry to the local UI.
   // Only the HTML shell is public to a top-level browser navigation; config,
   // keys, subresources and state-changing requests retain origin checks.
-  return req.method === 'GET' && path === '/' &&
+  return req.method === 'GET' && (path === '/' || sessionPage(path)) &&
     req.headers['sec-fetch-mode'] === 'navigate' && req.headers['sec-fetch-dest'] === 'document';
 }
 function authorized(req, apiKey) {
@@ -113,7 +117,7 @@ export function createApp({ configStore, runtime, logger }) {
       let path = url.pathname;
       const managementRequest = path === '/api/playground' || /^\/api\/runs(?:\/|$)/.test(path);
       if (closing) throw appError('Service is shutting down.', 503, 'unavailable');
-      if (path.startsWith('/api/') || assets.has(path)) {
+      if (path.startsWith('/api/') || assets.has(path) || sessionPage(path)) {
         if (!sameOrigin(req) && !opensManagementPage(req, path)) throw appError('Cross-origin management access is forbidden.', 403, 'forbidden');
       }
       if (managementRequest) path = path === '/api/playground' ? '/v1/chat/completions' : path.replace(/^\/api/, '/v1');
@@ -130,8 +134,8 @@ export function createApp({ configStore, runtime, logger }) {
       }
       if (req.method === 'GET' && path === '/health') return json(res, 200, { status: 'ok', version: VERSION });
       if (req.method === 'GET' && path === '/api/auth/status') return json(res, 200, {required:false,authenticated:true,deployment:'local'});
-      if (req.method === 'GET' && assets.has(path)) {
-        const [file, mime] = assets.get(path);
+      if (req.method === 'GET' && (assets.has(path) || sessionPage(path))) {
+        const [file, mime] = assets.get(path) || ['session.html', 'text/html; charset=utf-8'];
         const content = await readFile(publicDir + file);
         res.writeHead(200, { 'Content-Type': mime }); res.end(content); return;
       }
@@ -168,6 +172,11 @@ export function createApp({ configStore, runtime, logger }) {
         return json(res, 200, openAIModel(model));
       }
       if (path === '/api/sessions' && req.method === 'GET') return json(res, 200, { sessions: runtime.list() });
+      if (path.startsWith('/api/sessions/') && req.method === 'GET') {
+        let id;
+        try { id = decodeURIComponent(path.slice('/api/sessions/'.length)); } catch { throw appError('Invalid session ID.'); }
+        return json(res, 200, await runtime.details(id, itemPagination(url.searchParams)));
+      }
       if (path.startsWith('/api/sessions/') && req.method === 'DELETE') {
         const id = decodeURIComponent(path.slice('/api/sessions/'.length));
         await runtime.closeSession(id);

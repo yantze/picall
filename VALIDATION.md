@@ -1,8 +1,10 @@
 # PiCall 0.9.0 双部署整合验证
 
-运行环境：Linux、Node.js 24.19.0、真实 Pi Durable 1.5.0 和 SQLite；云端使用真实 workerd、PiHarness 和 Lifecycle，上游为模拟服务。
+运行环境：Linux、Node.js 24.22.1、真实 Pi Durable 1.5.0 和 SQLite；云端使用真实 workerd、PiHarness 和 Lifecycle，上游为模拟服务。
 
-新增预算提醒和耗时观测，并衔接 `main` 的正文延迟竞争后：共享工具 30 项、本地 47 项、workerd 25 项，共 **102 项自动测试通过**；语法与类型检查、双平台浏览器、独立 npm 安装包启动及 Worker dry-run 构建通过。验证覆盖逐轮提醒、关闭后的基线模式、响应体耗时及跨重启的未知时长处理。
+新增共享会话 SQLite 和会话 item 详情页后：共享工具 30 项、本地 54 项、workerd 26 项，共 **110 项自动测试通过**；语法与类型检查、双平台浏览器、独立 npm 安装包启动及 Worker dry-run 构建通过。
+
+本轮新增验证包括多会话共库与隔离、关闭单个会话后其他会话继续执行、详情读取不加载执行句柄、分页与同源鉴权、过期命名空间清理、真实旧布局的完整迁移和续接、未完成任务恢复、迁移中断回滚及重试、不重复导入旧备份、未知 schema 拒绝与 schema 1 迁移。浏览器覆盖两端点击 ID 进入专页、右侧时间列、展开记录后刷新、直接重载 URL、404 状态、桌面与手机无横向溢出；截图在忽略提交的 `test-results/*-session*.png`。Cloudflare 的 HTML Assets 规范化重定向已通过内部请求修正，页面保留会话 URL。
 
 ## 自动验证
 

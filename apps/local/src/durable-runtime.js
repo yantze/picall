@@ -1,10 +1,7 @@
-import { chmod, open } from 'node:fs/promises';
-import { join } from 'node:path';
 import { Harness, defineDoc, defineDocFamily, UsageDoc } from '@earendil-works/pi-durable';
-import { SqliteStorage } from '@earendil-works/pi-durable/storage/sqlite';
-import { openNodeSqliteDatabase } from '@earendil-works/pi-durable/storage/sqlite/node';
+import { SessionStore } from './session-store.js';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
-import { RunIndex, publicRun, terminal, digest, fingerprint, runPattern } from './run-index.js';
+import { RunIndex, publicRun, terminal, fingerprint, runPattern, sessionPattern } from './run-index.js';
 import { configFingerprint, createModelRuntime, modelInfo } from './durable-models.js';
 import { createResearchTools, researchSystemPrompt } from '../../../packages/tools/index.js';
 import { researchRegistry } from '../../../packages/core/registry.js';
@@ -36,6 +33,7 @@ export class DurableRuntime {
     this.net = net;
     this.checkpoint = checkpoint;
     this.index = new RunIndex(dataDir);
+    this.sessions = new SessionStore(this.index.directory);
     this.handles = new Map();
     this.openings = new Map();
     this.drivers = new Map();
@@ -51,15 +49,20 @@ export class DurableRuntime {
       await this.index.open();
       try {
         if (this.closing) throw appError('Runtime is closing.', 503, 'unavailable');
-        await this.index.cleanup(id => this.evict(id));
+        await this.sessions.open(this.index.sessions());
+        await this.index.cleanup(id => this.removeSession(id));
         await this.pump();
         if (this.closing) throw appError('Runtime is closing.', 503, 'unavailable');
         this.housekeeping = setInterval(() => {
-          void this.locked(async () => { await this.reap(); await this.index.cleanup(id => this.evict(id)); await this.pump(); }).catch(() => this.logger?.log('error', 'Durable maintenance failed.', { code: 'storage_error' }));
+          void this.locked(async () => { await this.reap(); await this.index.cleanup(id => this.removeSession(id)); await this.pump(); }).catch(() => this.logger?.log('error', 'Durable maintenance failed.', { code: 'storage_error' }));
         }, 60000);
         this.housekeeping.unref();
         return this;
-      } catch (error) { await this.closeHandles(); this.index.close(); throw error; }
+      } catch (error) {
+        try { await this.closeHandles(); }
+        finally { try { await this.sessions.close(); } finally { this.index.close(); } }
+        throw error;
+      }
     })();
     return this.opening;
   }
@@ -80,6 +83,17 @@ export class DurableRuntime {
     return this.index.sessions().filter(session => !session.retired).map(session => ({ ...session,
       busy: Boolean(this.index.active(session.id)), loaded: this.handles.has(session.id) })).map(({ configHash, ...session }) => session);
   }
+  async details(id, page) {
+    await this.open();
+    if (!sessionPattern.test(id)) throw appError('Invalid session ID.', 400, 'invalid_request');
+    return this.locked(async () => {
+      const session = this.index.session(id);
+      if (!session) throw appError('Session not found.', 404, 'session_not_found');
+      const { configHash, ...publicSession } = session;
+      return { session: { ...publicSession, busy: Boolean(this.index.active(id)) }, ...await this.sessions.items(id, page, this.getConfig()) };
+    });
+  }
+  async removeSession(id) { await this.evict(id); await this.sessions.remove(id); }
   async lookup(input, options = {}) {
     await this.open();
     const run = this.index.lookup(input, options);
@@ -102,7 +116,7 @@ export class DurableRuntime {
       const identity = options.identityInput || input;
       const previous = this.index.lookup(identity, options);
       if (previous) return publicRun(previous);
-      await this.index.cleanup(id => this.evict(id));
+      await this.index.cleanup(id => this.removeSession(id));
       const config = structuredClone(this.getConfig());
       if (!config.modelApiKey) throw appError('Configure a model API key in the local settings page.', 503, 'model_unavailable');
       if (![config.defaultModel, `picall/${config.defaultModel}`].includes(input.model || config.defaultModel)) throw appError('The requested model is unavailable.', 404, 'model_not_found');
@@ -140,11 +154,7 @@ export class DurableRuntime {
     return pending;
   }
   async openHandle(sessionId, config) {
-    const path = join(this.index.directory, 'sessions', digest(sessionId) + '.sqlite');
-    const file = await open(path, 'a', 0o600); await file.close(); await chmod(path, 0o600);
-    const database = await openNodeSqliteDatabase(path);
-    await database.exec('PRAGMA synchronous=FULL');
-    const storage = await SqliteStorage.open(database, { prefix: 'pi_' });
+    const storage = await this.sessions.openSession(sessionId);
     const handle = { sessionId, config: structuredClone(config), active: this.index.active(sessionId), storage, lastUsed: Date.now(), timer: null };
     const guard = () => {
       if (this.closing) throw appError('Runtime is closing.', 503, 'runtime_closed');
@@ -416,7 +426,7 @@ export class DurableRuntime {
       if (closingError) throw closingError;
     } finally {
       for (const id of [...this.waiters.keys()]) this.notify(id, undefined, appError('Service stopped. Query the run after restart.', 503, 'unavailable'));
-      this.index.close();
+      try { await this.sessions.close(); } finally { this.index.close(); }
     }
   }
 }

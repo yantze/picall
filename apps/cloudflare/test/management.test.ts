@@ -10,6 +10,24 @@ async function fixture(t:any){const dir=await mkdtemp(join(tmpdir(),'picall-mana
 async function login(mf:Miniflare){const response=await mf.dispatchFetch('https://test/api/auth/login',{method:'POST',headers:{origin:'https://test','content-type':'application/json'},body:JSON.stringify({token:bindings.ADMIN_TOKEN})});assert.equal(response.status,200,await response.clone().text());const cookie=response.headers.get('set-cookie')!;assert.match(cookie,/HttpOnly/);assert.match(cookie,/Secure/);assert.match(cookie,/SameSite=Strict/);return cookie.split(';')[0];}
 const manage=(mf:Miniflare,cookie:string,path:string,body?:any,method=body===undefined?'GET':'PUT')=>mf.dispatchFetch('https://test'+path,{method,headers:{cookie,origin:'https://test','content-type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)})});
 
+test('session items require management login, paginate actual records and persist across restart',async t=>{
+  const f=await fixture(t),cookie=await login(f.mf);
+  const run:any=await(await req(f.mf,'/v1/runs',{prompt:'research'})).json();await settled(f.mf,run.id);
+  const path='/api/sessions/'+run.sessionId;
+  assert.equal((await req(f.mf,path)).status,401);
+  assert.equal((await manage(f.mf,cookie,'/api/sessions/missing')).status,404);
+  assert.equal((await manage(f.mf,cookie,path+'?limit=101')).status,400);
+  assert.equal((await manage(f.mf,cookie,'/api/sessions/%ZZ')).status,400);
+  const response=await manage(f.mf,cookie,path);assert.equal(response.status,200,await response.clone().text());
+  const full:any=await response.json();assert.ok(full.items.length>3);assert.equal(full.session.id,run.sessionId);
+  assert.ok(full.items.some((item:any)=>item.kind==='pi.tool-result' && item.durationMs!==null));
+  const items:any[]=[];let after=0;
+  do {const page:any=await(await manage(f.mf,cookie,path+'?limit=2&after='+after)).json();items.push(...page.items);after=page.nextCursor;}while(after!==null);
+  assert.deepEqual(items,full.items);
+  await f.restart();
+  const restored:any=await(await manage(f.mf,cookie,path)).json();assert.deepEqual(restored.items,items);
+});
+
 test('management auth is independent from API bearer, cookie login protects settings and rejects cross-origin writes',async t=>{
   const f=await fixture(t);
   assert.equal((await req(f.mf,'/api/config')).status,401);

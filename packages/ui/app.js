@@ -491,7 +491,9 @@ async function loadSessions() {
       row.append(dot(session.busy ? 'green' : ''));
       const detail = document.createElement('div');
       detail.className = 'session-detail';
-      const id = document.createElement('code');
+      const id = document.createElement('a');
+      id.className = 'session-link';
+      id.href = `/sessions/${encodeURIComponent(session.id)}`;
       id.textContent = session.id;
       id.title = session.id;
       const model = document.createElement('span');

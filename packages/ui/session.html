@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>会话记录 · PiCall</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/session.css">
+  <script type="module" src="/session.js"></script>
+</head>
+<body class="session-page">
+  <header class="session-topbar"><a href="/" class="brand"><span class="brand-mark">π</span>PiCall</a><a href="/" class="back-link">← 返回控制台</a></header>
+  <main class="session-main">
+    <div class="session-heading"><div><p class="eyebrow">SESSION ITEMS</p><h1>会话记录</h1><code id="session-id"></code></div><button id="refresh" class="button secondary" type="button">刷新记录</button></div>
+    <p id="session-meta" role="status">正在读取会话…</p>
+    <p class="timing-help">每行是一条已保存的 item。右侧展示记录时间与所属任务耗时（含等待和重试）；同一任务的多个 item 共享耗时，不应累加。缺失的历史时间显示为「未知」。</p>
+    <div id="session-error" role="alert" hidden></div>
+    <a id="login-link" class="back-link" href="/" hidden>前往控制台登录</a>
+    <section class="items-panel" aria-label="会话 item 记录">
+      <div class="items-header"><span>ITEM / 内容</span><span id="time-heading">记录时间 / 执行耗时</span></div>
+      <p id="items-empty" hidden>这个会话还没有 item 记录。</p>
+      <ol id="session-items"></ol>
+    </section>
+    <div class="items-footer"><span id="item-count" role="status"></span><button id="load-more" class="button secondary" type="button" hidden>加载更多</button></div>
+  </main>
+</body>
+</html>

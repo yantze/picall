@@ -10,6 +10,7 @@ import { runFailure, errorEnvelope } from '../../../packages/core/errors.js';
 import { createTelemetry, timingSnapshot } from '../../../packages/core/telemetry.js';
 import { managementRoute } from './web';
 import { routeAPI } from './http';
+import { itemPagination, itemQuery, itemPage } from '../../../packages/core/session-items.js';
 export { Management };
 
 import { createModels } from '@earendil-works/pi-ai/models';
@@ -177,6 +178,14 @@ export class SearchSession extends DurableObject<Env> {
   async onRequest(request: Request) {
     try {
       const path = new URL(request.url).pathname;
+      if (path === '/items' && request.method === 'GET') {
+        const page = itemPagination(new URL(request.url).searchParams);
+        const exists = this.ctx.storage.sql.exec("SELECT name FROM sqlite_master WHERE type='table' AND name='pi_entries'").toArray().length;
+        if (!exists) return json({items:[], nextCursor:null});
+        const config = JSON.parse(await this.env.MANAGEMENT.getByName('global').getConfig());
+        const rows = this.ctx.storage.sql.exec(itemQuery('pi_'), page.after, page.limit + 1).toArray();
+        return json(itemPage(rows, page, config));
+      }
       if (path === '/submit')
         return await this.locked(async () => {
           const { id, session, input, fingerprint, configHash, deadline, createdAt } =

@@ -18,6 +18,31 @@ const executablePath=process.env.PICALL_CHROMIUM_PATH || (existsSync('/usr/bin/c
 const browser=await chromium.launch({executablePath,headless:true,args:['--no-sandbox']});
 const errors=[];
 await mkdir('test-results',{recursive:true});
+async function checkSessionPage(page, base, name) {
+  const link=page.locator('#session-list a.session-link').first();await link.waitFor();
+  const href=await link.getAttribute('href');await link.click();
+  await page.waitForFunction(()=>document.querySelectorAll('.item-row').length>0);
+  assert.equal(new URL(page.url()).pathname,href);
+  // Fetch in Chromium: it accepts Secure localhost cookies, unlike the separate
+  // APIRequestContext used by Playwright for plain-HTTP dev addresses.
+  const items=await page.evaluate(async path=>{const response=await fetch(path);if(!response.ok)throw Error('Session API '+response.status);return response.json();},'/api'+href);
+  assert.equal(await page.locator('.item-row').count(),items.items.length);
+  assert.match(await page.locator('#session-items').textContent(),/ms/);
+  const left=await page.locator('.item-content').first().boundingBox(),right=await page.locator('.item-time').first().boundingBox();
+  assert.ok(right.x>left.x+left.width);
+  await page.locator('.item-content summary').first().click();
+  await page.locator('#refresh').click();await page.waitForFunction(()=>!document.querySelector('#refresh').disabled);
+  assert.equal(await page.locator('.item-content details').first().getAttribute('open'),'');
+  await page.reload();await page.waitForFunction(()=>document.querySelectorAll('.item-row').length>0);
+  await page.screenshot({path:`test-results/${name}-session.png`,fullPage:true});
+  await page.setViewportSize({width:390,height:844});
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  await page.screenshot({path:`test-results/${name}-session-mobile.png`,fullPage:true});
+  await page.goto(base+'/sessions/missing');await page.waitForFunction(()=>!document.querySelector('#session-error').hidden);
+  assert.match(await page.locator('#session-error').textContent(),/不存在或已过期/);
+  await page.setViewportSize({width:1440,height:1000});await page.goto(base);
+  await page.waitForFunction(()=>document.querySelector('#model').value.startsWith('picall/'));
+}
 try {
   const page=await browser.newPage({viewport:{width:1440,height:1000}});
   page.on('pageerror',error=>errors.push(error.message));
@@ -28,6 +53,7 @@ try {
   await page.locator('#run-button').click();
   await page.waitForFunction(()=>document.querySelector('#response-meta').textContent.startsWith('完成'));
   assert.equal(await page.locator('#response-output').textContent(),'The final verified answer is 42.');
+  await checkSessionPage(page,f.base,'local');
   await page.locator('#new-session').click();f.services.delay=1000;
   await page.locator('#prompt').fill('SLOW PING');
   const waiting=page.waitForResponse(response=>response.url().endsWith('/api/playground'));
@@ -43,6 +69,7 @@ try {
   await page.waitForFunction(()=>document.querySelector('#response-meta').textContent.startsWith('完成'));
   assert.equal(await page.locator('#timing-panel').isVisible(),true);
   await page.locator('#timing-panel summary').click();assert.match(await page.locator('#timing-list').textContent(),/模型请求/);
+  await checkSessionPage(page,f.base,'local-restarted');
   await page.setViewportSize({width:390,height:844});
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
   await page.screenshot({path:'test-results/local-mobile.png',fullPage:true});
@@ -69,6 +96,7 @@ try {
   await cloud.locator('[data-view="overview"]').click();await cloud.locator('#prompt').fill('research');await cloud.locator('#run-button').click();
   await cloud.waitForFunction(()=>document.querySelector('#response-meta').textContent.startsWith('完成'));
   assert.match(await cloud.locator('#response-output').textContent(),/Final answer/);
+  await checkSessionPage(cloud,String(address).replace(/\/$/,''),'cloudflare');
   await cloud.locator('#new-session').click();await cloud.locator('#prompt').fill('slow research');await cloud.locator('#run-button').click();
   await cloud.locator('#stop-button').click();await cloud.waitForFunction(()=>document.querySelector('#response-meta').textContent.includes('取消'));
   await cloud.locator('[data-view="settings"]').click();await cloud.locator('#settings-tab-model').click();
@@ -82,7 +110,7 @@ try {
   await cloud.setViewportSize({width:390,height:844});assert.ok(await cloud.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await cloud.screenshot({path:'test-results/cloudflare-mobile.png',fullPage:true});
   await cloud.locator('#logout-button').click();await cloud.waitForFunction(()=>!document.querySelector('#login-panel').hidden);
   assert.deepEqual(errors,[]);
-  console.log(JSON.stringify({passed:true,checks:['Node research and restart recovery','shared mobile UI','Worker login and logout','encrypted settings UI','Worker research and explicit cancel','compatible gateway and literal key','page reload without credential storage','no browser exceptions']}));
+  console.log(JSON.stringify({passed:true,checks:['Node research and restart recovery','local and Worker session items, timestamps and direct reload','shared mobile UI','Worker login and logout','encrypted settings UI','Worker research and explicit cancel','compatible gateway and literal key','page reload without credential storage','no browser exceptions']}));
 } finally {
   await browser.close();await application?.close();await mf?.dispose();for(const cleanup of cleanups.reverse())await cleanup();await rm(directory,{recursive:true,force:true});
 }
