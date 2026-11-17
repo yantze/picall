@@ -135,7 +135,7 @@ export function createApp({ configStore, runtime, logger }) {
       if (req.method === 'GET' && path === '/health') return json(res, 200, { status: 'ok', version: VERSION });
       if (req.method === 'GET' && path === '/api/auth/status') return json(res, 200, {required:false,authenticated:true,deployment:'local'});
       if (req.method === 'GET' && (assets.has(path) || sessionPage(path))) {
-        const [file, mime] = assets.get(path) || ['session.html', 'text/html; charset=utf-8'];
+        const [file, mime] = assets.get(path) || ['index.html', 'text/html; charset=utf-8'];
         const content = await readFile(publicDir + file);
         res.writeHead(200, { 'Content-Type': mime }); res.end(content); return;
       }

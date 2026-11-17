@@ -25,7 +25,7 @@ flowchart TD
 
 启动在取得写入锁后，将旧 `sessions/<SHA-256>.sqlite` 的 `pi_` 表只读迁移到对应命名空间。记录、ID 分配器、文档修订与迁移标记原子提交；失败回滚并保留旧文件，重启可重试。仅支持固定 SDK 的 schema 1 / 2，未知版本显式失败。旧文件保留作备份，不再双写；按原 TTL 同时清理命名空间和备份文件。索引受理记录、固定 requestId 和幂等最终化继续关闭跨数据库崩溃窗口。SDK 管理模型和工具循环，主机管理单写者锁、执行容量、句柄释放及启动扫描。
 
-会话详情通过管理 API 分页读取 entries 并关联 producing task 的开始/结束时间，不为读取而创建 Harness。共用页面为 `/sessions/{id}`；正文通过 textContent 展示，凭证字段值脱敏，分页参数有上限。Cloudflare 从原有 DO 的 `pi_` 表读取，保留原生 DO 存储模型和管理登录保护。
+会话详情通过管理 API 分页读取 entries 并关联 producing task 的开始/结束时间，不为读取而创建 Harness。管理页面新增独立「会话历史」菜单，以列表和右侧记录面板展示；URL 为 `/?tab=sessions&session={id}`，旧 `/sessions/{id}` 链接复用管理页面并转换路由。切换会话或离开会话视图会取消未完成的读取，避免旧响应污染新面板；正文通过 textContent 展示，凭证字段值脱敏，分页参数有上限。Cloudflare 从原有 DO 的 `pi_` 表读取，保留原生 DO 存储模型和管理登录保护。列表保留成功、失败、取消及关闭的历史，`status` / `lastRunId` 来自最近创建的 run，`busy` 仅表示其未结束；查看历史不会创建 Harness、执行模型或占用并发槽位。UI 仅在用户明确选择「继续此会话」并发送消息时提交原 session ID，不引入独立激活状态。成功历史仍支持原 ID 续接，失败/取消/关闭的会话继续遵守原有 retired 约束。
 
 ## Cloudflare
 

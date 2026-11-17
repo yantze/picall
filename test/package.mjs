@@ -11,6 +11,8 @@ try {
   const {stdout}=await execute('npm',['pack','--json','--pack-destination',directory],{cwd:root});
   const packed=JSON.parse(stdout)[0];
   assert.ok(packed.files.some(file=>file.path==='packages/ui/index.html'));
+  assert.ok(packed.files.some(file=>file.path==='packages/ui/session.js'));
+  assert.ok(packed.files.some(file=>file.path==='packages/ui/session.css'));
   assert.ok(packed.files.some(file=>file.path==='apps/local/src/durable-runtime.js'));
   assert.ok(!packed.files.some(file=>/^(apps\/cloudflare|node_modules|test|\.env)/.test(file.path)));
   const installed=join(directory,'installed');
@@ -32,6 +34,8 @@ try {
       const url='http://127.0.0.1:'+app.server.address().port;
       assert.equal((await fetch(url+'/health')).status,200);
       assert.match(await(await fetch(url)).text(),/PiCall/);
+      assert.match(await(await fetch(url+'/sessions/old-link')).text(),/data-view="sessions"/);
+      assert.equal((await fetch(url+'/session.js')).status,200);
       const status=await(await fetch(url+'/api/status')).json();assert.equal(status.runtime.kind,'pi-durable');
     } finally {await app.close();logger.close();}
   `;

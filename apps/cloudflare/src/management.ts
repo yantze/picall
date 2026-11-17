@@ -13,7 +13,7 @@ export type CloudConfig = {
   modelProvider:string;aiGatewayId:string;byokAlias:string;
 };
 type Summary = { id:string; sessionId:string;status:string;createdAt:number;updatedAt:number;model:string;elapsed_ms?:number;usage?:Json;service_calls?:Record<string,number> };
-type SessionSummary = { id:string;model:string;busy:boolean;lastUsedAt:number };
+type SessionSummary = { id:string;model:string;busy:boolean;lastUsedAt:number;retired:boolean;status:string;lastRunId:string };
 type LogItem = { id:number;time:string;level:string;message:string;details:Summary };
 export type ManagementState = {sessions:SessionSummary[];requests:{total:number;active:number;failed:number};logs:LogItem[]};
 type Sealed = { version: 1; iv: number[]; data: ArrayBuffer };
@@ -120,6 +120,9 @@ export class Management extends DurableObject<Env> {
     return Boolean(login && login.expires > Date.now() && await equalSecret(login.admin, await hash(this.env.ADMIN_TOKEN)));
   }
   async logout(token: string) { await this.ctx.storage.delete('login:' + await hash(token)); }
+  async retireSession(id: string) {
+    await this.ctx.storage.put('closed-session:' + id, { closedAt:Date.now() });
+  }
   async record(run: Summary) {
     // Never persist inputs, tool bodies or secrets in the management index.
     const value = Object.fromEntries(Object.entries(run).filter(([key]) => ['id','sessionId','status','createdAt','updatedAt','model','elapsed_ms','usage','service_calls'].includes(key))) as Summary;
@@ -141,15 +144,23 @@ export class Management extends DurableObject<Env> {
   }
   async state(): Promise<string> {
     const runs = [...(await this.ctx.storage.list<Summary>({ prefix:'run:' })).values()].sort((a,b)=>a.updatedAt-b.updatedAt);
+    const closed = await this.ctx.storage.list({ prefix:'closed-session:' });
     const sessions = new Map<string, SessionSummary>();
-    for (const run of runs) sessions.set(run.sessionId, { id:run.sessionId, model:run.model, busy:['pending','running'].includes(run.status), lastUsedAt:run.updatedAt });
+    // A delayed update from an older run must not replace a newer turn's status.
+    const latest = new Map<string, Summary>();
+    for (const run of runs) {
+      const previous = latest.get(run.sessionId);
+      if (!previous || run.createdAt >= previous.createdAt) latest.set(run.sessionId, run);
+    }
+    for (const run of latest.values()) sessions.set(run.sessionId, { id:run.sessionId, model:run.model, busy:['pending','running'].includes(run.status), lastUsedAt:run.updatedAt,
+      status:run.status,lastRunId:run.id,retired:closed.has('closed-session:' + run.sessionId) || ['failed','cancelled'].includes(run.status) });
     return JSON.stringify({ sessions:[...sessions.values()], requests:{ total:runs.length, active:runs.filter(run => ['pending','running'].includes(run.status)).length, failed:runs.filter(run=>run.status==='failed').length },
       logs:[...(await this.ctx.storage.list<LogItem>({prefix:'event:',reverse:true,limit:500})).values()].reverse() });
   }
   async alarm() {
     const now = Date.now();
     const entries = await this.ctx.storage.list<any>();
-    const expired = [...entries].filter(([key,value]) => key.startsWith('login:') ? value.expires <= now : key.startsWith('event:') ? Date.parse(value.time)<now-TTL : key.startsWith('run:') && value.updatedAt < now-TTL).map(([key])=>key);
+    const expired = [...entries].filter(([key,value]) => key.startsWith('login:') ? value.expires <= now : key.startsWith('event:') ? Date.parse(value.time)<now-TTL : key.startsWith('closed-session:') ? value.closedAt < now-TTL : key.startsWith('run:') && value.updatedAt < now-TTL).map(([key])=>key);
     for(let at=0;at<expired.length;at+=128) await this.ctx.storage.delete(expired.slice(at,at+128));
     await this.ctx.storage.setAlarm(now+3600000);
   }

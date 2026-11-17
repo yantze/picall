@@ -12,6 +12,44 @@ import { ConfigStore } from '../src/config.js';
 import { digest } from '../src/run-index.js';
 import { setup, completion, mockServices, until } from './helpers.mjs';
 
+test('session history settles automatically and resumes only on explicit submission with its ID', async t => {
+  const f = await setup(t);
+  f.services.delay = 100;
+  const first = await f.runtime.submit(completion('HISTORY FIRST'), { sessionId: 'history' });
+  let summary = (await (await f.request('/api/sessions')).json()).sessions.find(session => session.id === 'history');
+  assert.equal(summary.busy, true); assert.equal(summary.status, 'running');
+  await f.runtime.wait(first.id);
+  await f.runtime.evict('history');
+  const calls = f.services.requests.length;
+  summary = (await (await f.request('/api/sessions')).json()).sessions.find(session => session.id === 'history');
+  assert.equal(summary.busy, false); assert.equal(summary.status, 'completed'); assert.equal(summary.lastRunId, first.id);
+  assert.equal((await (await f.request('/api/status')).json()).sessions.busy, 0);
+  const details = await (await f.request('/api/sessions/history')).json();
+  assert.equal(details.session.status, 'completed');
+  assert.equal(f.runtime.handles.has('history'), false);
+  assert.equal(f.services.requests.length, calls, 'viewing history must not execute a model request');
+  const next = await f.runtime.submit(completion('HISTORY NEXT'), { sessionId: 'history' });
+  assert.equal((await f.runtime.wait(next.id)).status, 'completed');
+  const continued = await (await f.request('/api/sessions/history')).json();
+  assert.equal(continued.session.lastRunId, next.id);
+  assert.match(JSON.stringify(continued.items), /HISTORY FIRST/); assert.match(JSON.stringify(continued.items), /HISTORY NEXT/);
+  await f.runtime.closeSession('history');
+  assert.equal(f.runtime.list().find(session => session.id === 'history').retired, true);
+});
+
+test('cancelled and failed tasks remain as stopped history, not active sessions', async t => {
+  const f = await setup(t); f.services.delay = 300;
+  const run = await f.runtime.submit(completion('HISTORY CANCEL'), { sessionId: 'cancelled-history' });
+  await f.runtime.cancel(run.id);
+  const failed = await f.runtime.submit(completion('FAIL'), { sessionId: 'failed-history' });
+  assert.equal((await f.runtime.wait(failed.id)).status, 'failed');
+  const sessions = (await (await f.request('/api/sessions')).json()).sessions;
+  for (const [id, status] of [['cancelled-history','cancelled'], ['failed-history','failed']]) {
+    const session = sessions.find(session => session.id === id);
+    assert.equal(session.busy, false); assert.equal(session.status, status); assert.equal(session.retired, true);
+  }
+});
+
 test('concurrent sessions share one database; eviction, read-only details, paging and TTL remain isolated', async t => {
   const f = await setup(t);
   f.services.delay = 150;

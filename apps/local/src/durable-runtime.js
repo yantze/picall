@@ -80,17 +80,23 @@ export class DurableRuntime {
   }
   list() {
     if (!this.index.db || this.index.closed) return [];
-    return this.index.sessions().filter(session => !session.retired).map(session => ({ ...session,
-      busy: Boolean(this.index.active(session.id)), loaded: this.handles.has(session.id) })).map(({ configHash, ...session }) => session);
+    const latest = new Map();
+    for (const run of this.index.all()) {
+      const previous = latest.get(run.sessionId);
+      if (!previous || run.createdAt > previous.createdAt || (run.createdAt === previous.createdAt && run.updatedAt >= previous.updatedAt)) latest.set(run.sessionId, run);
+    }
+    return this.index.sessions().map(({ configHash, ...session }) => {
+      const run = latest.get(session.id);
+      return { ...session, busy: Boolean(run && !terminal(run)), status: run?.status || 'unknown', lastRunId: run?.id || null };
+    });
   }
   async details(id, page) {
     await this.open();
     if (!sessionPattern.test(id)) throw appError('Invalid session ID.', 400, 'invalid_request');
     return this.locked(async () => {
-      const session = this.index.session(id);
+      const session = this.list().find(session => session.id === id);
       if (!session) throw appError('Session not found.', 404, 'session_not_found');
-      const { configHash, ...publicSession } = session;
-      return { session: { ...publicSession, busy: Boolean(this.index.active(id)) }, ...await this.sessions.items(id, page, this.getConfig()) };
+      return { session, ...await this.sessions.items(id, page, this.getConfig()) };
     });
   }
   async removeSession(id) { await this.evict(id); await this.sessions.remove(id); }

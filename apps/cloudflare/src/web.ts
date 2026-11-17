@@ -14,9 +14,8 @@ export async function managementRoute(request:Request, env:Env):Promise<Response
   if(path==='/health')return json({status:'ok',version:'0.9.0',deployment:'cloudflare'});
   if(['/', '/app.js','/styles.css','/session.js','/session.css'].includes(path) && request.method==='GET') return env.ASSETS.fetch(request);
   if(/^\/sessions\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(path) && request.method==='GET') {
-    // Assets canonicalizes .html URLs with a redirect. Request its canonical
-    // asset path internally so the browser keeps /sessions/{id} on reload.
-    const asset=new URL(request.url);asset.pathname='/session';return env.ASSETS.fetch(new Request(asset,request));
+    // Legacy session links use the management shell and restore its panel route.
+    const asset=new URL(request.url);asset.pathname='/';return env.ASSETS.fetch(new Request(asset,request));
   }
   if(!path.startsWith('/api/'))return undefined;
   const origin=request.headers.get('origin');
@@ -56,8 +55,12 @@ export async function managementRoute(request:Request, env:Env):Promise<Response
     return json({session,...await response.json() as object});
   }
   if(path.startsWith('/api/sessions/') && request.method==='DELETE') {
-    const id=decodeURIComponent(path.slice('/api/sessions/'.length));
-    const response=await env.SESSIONS.getByName(id).fetch('https://internal/close',{method:'POST'});return response;
+    let id:string;
+    try { id=decodeURIComponent(path.slice('/api/sessions/'.length)); } catch { return fail('invalid_session_id',400); }
+    if(!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(id))fail('invalid_session_id',400);
+    const response=await env.SESSIONS.getByName(id).fetch('https://internal/close',{method:'POST'});
+    if(response.ok)await admin.retireSession(id);
+    return response;
   }
   if(path==='/api/logs' && request.method==='GET')return json({logs:(JSON.parse(await admin.state()) as ManagementState).logs});
   if(path==='/api/models' && request.method==='GET') {

@@ -1,4 +1,5 @@
 'use strict';
+import { createSessionPanel, sessionStatusLabel } from './session.js';
 
 const $ = (id) => document.getElementById(id);
 const DEFAULT_ADDITIONAL_SYSTEM_PROMPT = '按问题复杂度使用工具：简单事实优先一次搜索和一个权威来源，证据充分后立即回答；复杂研究按需补查。';
@@ -7,7 +8,14 @@ const clearedSecrets = new Set();
 let activeRequest = null;
 const state = { config: null, status: null, models: [], logs: [], seenLogs: new Set(), paused: false, sessionId: null, controller: null, eventSource: null, toastTimer: null, logFloor: 0, latestLogTime: '', logConnected: false, toolRun: null,
   capabilityTools: null, capabilityError: '', capabilityRequest: 0,
-  toolOverrides: Object.create(null), currentView: 'overview', settingsSection: 'general' };
+  toolOverrides: Object.create(null), currentView: 'overview', settingsSection: 'general', sessions: [], selectedSessionId: null };
+const sessionPanel = createSessionPanel(api, id => {
+  state.sessionId = id;
+  showView('overview');
+  $('prompt').value = '';
+  $('prompt').focus();
+  toast(`已选择会话 ${id}，发送下一条消息即可继续。`);
+}, id => copy(id, '会话 ID'));
 
 function cloneOverrides(value) {
   const result = Object.create(null);
@@ -24,7 +32,7 @@ function overrideValue(overrides, name, fallback) {
 async function api(path, options = {}) {
   const response = await fetch(path, { ...options, headers: { 'Content-Type': 'application/json', ...options.headers } });
   const result = await response.json();
-  if (!response.ok) { if (response.status===401 && result.error?.code==='management_login_required') { $('login-panel').hidden=false; state.eventSource?.close(); } throw new Error(result.error?.message || `请求失败 (${response.status})`); }
+  if (!response.ok) { if (response.status===401 && result.error?.code==='management_login_required') { $('login-panel').hidden=false; state.eventSource?.close(); } throw Object.assign(new Error(result.error?.message || `请求失败 (${response.status})`), { status: response.status }); }
   return result;
 }
 
@@ -51,10 +59,13 @@ async function copy(value, description) {
 
 function writeRoute() {
   const url = new URL(location.href);
+  url.pathname = '/';
   if (state.currentView === 'overview') url.searchParams.delete('tab');
   else url.searchParams.set('tab', state.currentView);
   if (state.currentView === 'settings' && state.settingsSection !== 'general') url.searchParams.set('section', state.settingsSection);
   else url.searchParams.delete('section');
+  if (state.currentView === 'sessions' && state.selectedSessionId) url.searchParams.set('session', state.selectedSessionId);
+  else url.searchParams.delete('session');
   if (url.href !== location.href) history.pushState({}, '', url);
 }
 
@@ -72,9 +83,9 @@ function showSettingsTab(section, updateUrl = true, focus = false) {
 }
 
 function showView(view, updateUrl = true, section = state.settingsSection) {
-  state.currentView = ['overview', 'logs', 'settings'].includes(view) ? view : 'overview';
-  for (const name of ['overview', 'logs', 'settings']) $(name + '-view').hidden = name !== state.currentView;
-  $('breadcrumb-current').textContent = { overview: '服务概览', logs: '实时日志', settings: '服务设置' }[state.currentView];
+  state.currentView = ['overview', 'logs', 'settings', 'sessions'].includes(view) ? view : 'overview';
+  for (const name of ['overview', 'logs', 'settings', 'sessions']) $(name + '-view').hidden = name !== state.currentView;
+  $('breadcrumb-current').textContent = { overview: '服务概览', logs: '实时日志', settings: '服务设置', sessions: '会话历史' }[state.currentView];
   document.querySelectorAll('[data-view]').forEach((button) => {
     const active = button.dataset.view === state.currentView;
     button.classList.toggle('active', active);
@@ -83,12 +94,36 @@ function showView(view, updateUrl = true, section = state.settingsSection) {
   if (state.currentView === 'settings') showSettingsTab(section, false);
   if (updateUrl) writeRoute();
   if (state.currentView === 'logs') renderLogs();
+  sessionPanel.setVisible(state.currentView === 'sessions');
+  if (state.currentView === 'sessions') void loadSessions();
 }
 
 function restoreRoute() {
-  const params = new URL(location.href).searchParams;
+  const url = new URL(location.href);
+  const legacy = /^\/sessions\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})$/.exec(url.pathname);
+  if (legacy) {
+    url.pathname = '/'; url.searchParams.set('tab', 'sessions'); url.searchParams.set('session', legacy[1]);
+    history.replaceState({}, '', url);
+  }
+  const params = url.searchParams;
   const view = params.get('tab');
-  showView(view === 'settings' || view === 'logs' ? view : 'overview', false, params.get('section') || 'general');
+  selectSession(params.get('session'), false);
+  showView(['settings', 'logs', 'sessions'].includes(view) ? view : 'overview', false, params.get('section') || 'general');
+}
+
+function selectSession(id, updateUrl = true) {
+  state.selectedSessionId = id || null;
+  sessionPanel.select(state.selectedSessionId);
+  updateSessionSelection();
+  if (updateUrl) writeRoute();
+}
+
+function updateSessionSelection() {
+  document.querySelectorAll('#session-list .session-link').forEach(link => {
+    const selected = link.dataset.sessionId === state.selectedSessionId;
+    link.closest('.session-item').classList.toggle('selected', selected);
+    if (selected) link.setAttribute('aria-current', 'true'); else link.removeAttribute('aria-current');
+  });
 }
 
 function updateCurl() {
@@ -474,51 +509,51 @@ function dot(color) {
   return element;
 }
 
+let sessionListRequest = 0, sessionListSnapshot = '';
 async function loadSessions() {
+  const request = ++sessionListRequest;
   try {
-    const { sessions } = await api('/api/sessions');
-    if (!sessions?.length) {
-      const empty = document.createElement('p');
-      empty.className = 'empty-small';
-      empty.textContent = '暂无会话。发送第一条请求开始。';
-      $('session-list').replaceChildren(empty);
-      return;
-    }
+    const { sessions = [] } = await api('/api/sessions');
+    if (request !== sessionListRequest) return;
+    state.sessions = sessions.toSorted((a, b) => (b.lastUsedAt || b.createdAt || 0) - (a.lastUsedAt || a.createdAt || 0) || a.id.localeCompare(b.id));
+    sessionPanel.observe(state.sessions.find(session => session.id === state.selectedSessionId));
+    $('session-nav-count').textContent = sessions.length;
+    $('session-list-count').textContent = `${sessions.length} 条历史 · ${sessions.filter(session => session.busy).length} 个任务执行中`;
+    $('session-list-error').hidden = true;
+    const snapshot = JSON.stringify(state.sessions);
+    if (sessionListSnapshot === snapshot) return;
+    sessionListSnapshot = snapshot;
+    const focusId = document.activeElement?.closest('.session-item')?.dataset.sessionId;
     const fragment = document.createDocumentFragment();
-    sessions.forEach((session) => {
-      const row = document.createElement('div');
-      row.className = 'session-item';
-      row.append(dot(session.busy ? 'green' : ''));
-      const detail = document.createElement('div');
-      detail.className = 'session-detail';
-      const id = document.createElement('a');
-      id.className = 'session-link';
-      id.href = `/sessions/${encodeURIComponent(session.id)}`;
-      id.textContent = session.id;
-      id.title = session.id;
-      const model = document.createElement('span');
-      model.textContent = `${session.model || '默认模型'} · ${session.busy ? '执行中' : '空闲'}`;
-      detail.append(id, model);
-      const close = document.createElement('button');
-      close.className = 'icon-button';
-      close.textContent = '×';
-      close.title = '结束会话';
-      close.setAttribute('aria-label', `结束会话 ${session.id}`);
-      close.addEventListener('click', async () => {
-        close.disabled = true;
-        try {
-          await api(`/api/sessions/${encodeURIComponent(session.id)}`, { method: 'DELETE' });
-          if (state.sessionId === session.id) state.sessionId = null;
-          await Promise.all([loadSessions(), loadStatus()]);
-          toast('会话已结束');
-        } catch (error) { toast(error.message, true); close.disabled = false; }
+    if (!sessions.length) {
+      const empty = document.createElement('p'); empty.className = 'empty-small';
+      empty.textContent = '暂无会话，发送第一条请求后会显示在这里。'; fragment.append(empty);
+    }
+    state.sessions.forEach(session => {
+      const row = document.createElement('div'); row.className = 'session-item'; row.dataset.sessionId = session.id;
+      const link = document.createElement('a'); link.className = 'session-link'; link.dataset.sessionId = session.id;
+      link.href = `/?tab=sessions&session=${encodeURIComponent(session.id)}`; link.title = session.id;
+      const detail = document.createElement('div'); detail.className = 'session-detail';
+      const id = document.createElement('code'); id.textContent = session.id;
+      const model = document.createElement('span'); model.textContent = session.model || '默认模型';
+      const status = document.createElement('span'); status.className = 'session-state'; status.textContent = sessionStatusLabel(session);
+      status.prepend(dot(session.busy ? 'green' : ''));
+      detail.append(id, model, status); link.append(detail);
+      link.addEventListener('click', event => {
+        if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        event.preventDefault(); selectSession(session.id);
       });
-      row.append(detail, close);
-      fragment.append(row);
+      row.append(link); fragment.append(row);
     });
-    $('session-list').replaceChildren(fragment);
+    $('session-list').replaceChildren(fragment); updateSessionSelection();
+    if (focusId) {
+      const row = [...$('session-list').children].find(row => row.dataset.sessionId === focusId);
+      (row?.querySelector('.session-link') || $('refresh-sessions')).focus({ preventScroll: true });
+    }
   } catch (error) {
-    $('session-list').textContent = `会话读取失败：${error.message}`;
+    if (request !== sessionListRequest) return;
+    $('session-list-error').textContent = `会话列表读取失败：${error.message}。请刷新重试。`;
+    $('session-list-error').hidden = false;
   }
 }
 
@@ -801,7 +836,10 @@ $('refresh-tools').addEventListener('click', async () => {
   $('refresh-tools').disabled = true;
   try { await loadStatus(); } finally { $('refresh-tools').disabled = false; }
 });
-$('refresh-sessions').addEventListener('click', loadSessions);
+$('refresh-sessions').addEventListener('click', async () => {
+  $('refresh-sessions').disabled = true;
+  try { await loadSessions(); } finally { $('refresh-sessions').disabled = false; }
+});
 $('refresh-button').addEventListener('click', () => { void refresh(true); });
 $('copy-endpoint').addEventListener('click', () => copy(baseUrl(), '接口地址'));
 $('copy-curl').addEventListener('click', () => copy($('curl-example').textContent, '请求示例'));
@@ -875,7 +913,7 @@ $('clear-logs').addEventListener('click', () => {
 
 async function refresh(includeCapabilities = false) {
   $('refresh-button').disabled = true;
-  await Promise.all([loadStatus(), loadSessions(), ...(includeCapabilities && state.currentView === 'settings' ? [loadCapabilities()] : [])]);
+  await Promise.all([loadStatus(), loadSessions(), ...(includeCapabilities && state.currentView === 'sessions' ? [sessionPanel.refresh()] : []), ...(includeCapabilities && state.currentView === 'settings' ? [loadCapabilities()] : [])]);
   $('refresh-button').disabled = false;
 }
 

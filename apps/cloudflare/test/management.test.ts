@@ -28,6 +28,47 @@ test('session items require management login, paginate actual records and persis
   const restored:any=await(await manage(f.mf,cookie,path)).json();assert.deepEqual(restored.items,items);
 });
 
+test('closed sessions persist in history without becoming active after restart',async t=>{
+  const f=await fixture(t),cookie=await login(f.mf);
+  const accepted:any=await(await req(f.mf,'/v1/runs',{prompt:'research'})).json();await settled(f.mf,accepted.id);
+  const path='/api/sessions/'+accepted.sessionId;
+  assert.ok((await(await manage(f.mf,cookie,'/api/sessions')).json() as any).sessions.some((session:any)=>session.id===accepted.sessionId));
+  assert.equal((await manage(f.mf,cookie,path,undefined,'DELETE')).status,200);
+  await f.restart();
+  const summary=(await(await manage(f.mf,cookie,'/api/sessions')).json() as any).sessions.find((session:any)=>session.id===accepted.sessionId);
+  assert.equal(summary.retired,true);assert.equal(summary.busy,false);assert.equal(summary.status,'completed');
+  const detail:any=await(await manage(f.mf,cookie,path)).json();assert.equal(detail.session.retired,true);assert.ok(detail.items.length>0);
+  const status:any=await(await manage(f.mf,cookie,'/api/status')).json();assert.equal(status.sessions.total,1);assert.equal(status.sessions.busy,0);
+});
+
+test('completed sessions are passive history until explicitly continued with the original ID',async t=>{
+  const f=await fixture(t),cookie=await login(f.mf);
+  const response=await manage(f.mf,cookie,'/api/playground',{messages:[{role:'user',content:'research'}],stream:false},'POST');
+  assert.equal(response.status,200);await response.json();
+  const sessionId=response.headers.get('x-session-id')!;
+  const list:any=await(await manage(f.mf,cookie,'/api/sessions')).json();
+  const summary=list.sessions.find((session:any)=>session.id===sessionId);
+  assert.equal(summary.status,'completed');assert.equal(summary.busy,false);
+  const ns=await f.mf.getDurableObjectNamespace('SESSIONS'),stub=ns.get(ns.idFromName(sessionId));
+  const before:any=await(await stub.fetch('https://internal/test-snapshot')).json();
+  assert.equal((await manage(f.mf,cookie,'/api/sessions/'+sessionId)).status,200);
+  const after:any=await(await stub.fetch('https://internal/test-snapshot')).json();assert.equal(after.calls,before.calls);
+  const next:any=await(await req(f.mf,'/v1/runs',{prompt:'continue research'},{'X-Session-Id':sessionId})).json();
+  assert.equal(next.sessionId,sessionId);await settled(f.mf,next.id);
+  const detail:any=await(await manage(f.mf,cookie,'/api/sessions/'+sessionId)).json();
+  assert.equal(detail.session.busy,false);assert.equal(detail.session.status,'completed');assert.equal(detail.session.lastRunId,next.id);
+  assert.ok(detail.items.some((item:any)=>JSON.stringify(item.messages).includes('continue research')));
+});
+
+test('late status from an older turn cannot make the newest turn look completed',async t=>{
+  const f=await fixture(t),cookie=await login(f.mf),now=Date.now();
+  const records=[{id:'history~new',sessionId:'history',status:'running',createdAt:now,updatedAt:now,model:'fixture'},
+    {id:'history~old',sessionId:'history',status:'completed',createdAt:now-100,updatedAt:now+100,model:'fixture'}];
+  for(const record of records)assert.equal((await f.mf.dispatchFetch('https://test/test-management-record',{method:'POST',body:JSON.stringify(record)})).status,200);
+  const list:any=await(await manage(f.mf,cookie,'/api/sessions')).json();
+  assert.equal(list.sessions[0].lastRunId,'history~new');assert.equal(list.sessions[0].status,'running');assert.equal(list.sessions[0].busy,true);
+});
+
 test('management auth is independent from API bearer, cookie login protects settings and rejects cross-origin writes',async t=>{
   const f=await fixture(t);
   assert.equal((await req(f.mf,'/api/config')).status,401);

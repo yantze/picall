@@ -6,7 +6,12 @@ import { setup, completion, until } from './helpers.mjs';
 test('health, configuration UI and configured model discovery require no generation request',async t=>{
   const f=await setup(t);
   assert.equal((await f.request('/health')).status,200);
-  assert.match(await (await f.request('/')).text(),/SQLite/);
+  const html=await (await f.request('/')).text();
+  assert.match(html,/SQLite/);
+  assert.match(html,/data-view="sessions"/);
+  assert.match(html,/id="session-records"/);
+  assert.doesNotMatch(html,/class="session-summary"/);
+  assert.equal(await(await f.request('/sessions/old-link')).text(),html);
   const status=await(await f.request('/api/status')).json();
   assert.equal(status.runtime.kind,'pi-durable');assert.equal(status.pi,undefined);
   const capabilities=await(await f.request('/api/capabilities')).json();

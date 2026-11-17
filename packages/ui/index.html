@@ -7,7 +7,8 @@
   <title>PiCall · 本地搜索 Agent</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23c8f291'/%3E%3Ctext x='12' y='46' font-size='48' fill='%2310120f'%3Eπ%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="/styles.css">
-  <script src="/app.js" defer></script>
+  <link rel="stylesheet" href="/session.css">
+  <script type="module" src="/app.js"></script>
 </head>
 <body>
 <section id="login-panel" class="login-overlay" hidden><form id="login-form" class="panel login-card"><h1>PiCall 云端管理</h1><p>使用独立管理令牌登录。令牌不会保存在浏览器存储中。</p><label for="management-token">管理令牌</label><input id="management-token" type="password" autocomplete="current-password" required><p id="login-error" role="alert"></p><button class="button primary" type="submit">登录</button></form></section>
@@ -16,6 +17,7 @@
     <div class="workspace-label">工作空间 <span>01</span></div>
     <nav aria-label="主导航">
       <button class="nav-item active" data-view="overview"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="5" height="5" rx="1"/><rect x="12" y="3" width="5" height="5" rx="1"/><rect x="3" y="12" width="5" height="5" rx="1"/><rect x="12" y="12" width="5" height="5" rx="1"/></svg>服务概览<span class="nav-dot"></span></button>
+      <button class="nav-item" type="button" data-view="sessions"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 3h12a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H8l-5 3V4a1 1 0 0 1 1-1Z"/><path d="M6 7h8M6 11h5"/></svg>会话历史<span class="count-badge" id="session-nav-count">0</span></button>
       <button class="nav-item" type="button" data-view="settings"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 5h12M4 10h12M4 15h12"/><circle cx="7" cy="5" r="2"/><circle cx="13" cy="10" r="2"/><circle cx="8" cy="15" r="2"/></svg>服务设置<span class="nav-dot"></span></button>
       <button class="nav-item" data-view="logs"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m4 5 4 5-4 5m7 0h5"/></svg>实时日志<span class="count-badge" id="log-count">0</span></button>
     </nav>
@@ -28,14 +30,38 @@
       <div class="page-heading"><div><div class="eyebrow">YOUR AGENT. ANY APPLICATION.</div><h1>本地运行，联网研究<span>.</span></h1><p>在网页配置你的模型和搜索服务，通过 OpenAI 接口连接应用。</p></div><span class="pill"><span class="dot green"></span><span id="deployment-label">本地服务</span></span></div>
       <div class="notice" id="pi-notice" hidden role="status"></div>
       <section class="endpoint-card" aria-label="API 地址"><div><span class="overline">OPENAI COMPATIBLE ENDPOINT</span><div class="endpoint-line"><code id="endpoint">—</code><button class="icon-button copy-button" id="copy-endpoint" aria-label="复制 API 地址" title="复制 API 地址">⧉</button></div><span class="endpoint-hint">把此地址填入外部应用的 Base URL 即可接入</span></div><div class="endpoint-protocol"><span class="protocol-node">应用</span><span class="protocol-arrow">→</span><span class="protocol-node current">PiCall</span><span class="protocol-arrow">→</span><span class="protocol-node">Durable</span></div></section>
-      <div class="stats-grid"><article class="stat-card"><span>累计请求 <span class="stat-symbol">↗</span></span><strong id="requests-total">—</strong><small><span class="dot green"></span><span id="requests-active">0</span> 个正在执行</small></article><article class="stat-card"><span>活跃会话 <span class="stat-symbol">◫</span></span><strong id="sessions-total">—</strong><small>保留多轮对话上下文</small></article><article class="stat-card"><span>运行时长 <span class="stat-symbol">◷</span></span><strong id="uptime">—</strong><small id="pi-version">正在检查 Pi 运行时</small></article></div>
+      <div class="stats-grid"><article class="stat-card"><span>累计请求 <span class="stat-symbol">↗</span></span><strong id="requests-total">—</strong><small><span class="dot green"></span><span id="requests-active">0</span> 个正在执行</small></article><article class="stat-card"><span>历史会话 <span class="stat-symbol">◫</span></span><strong id="sessions-total">—</strong><small>保存任务记录与多轮对话</small></article><article class="stat-card"><span>运行时长 <span class="stat-symbol">◷</span></span><strong id="uptime">—</strong><small id="pi-version">正在检查 Pi 运行时</small></article></div>
       <div class="content-grid">
         <div class="left-column">
 <section class="panel model-catalog"><div class="panel-heading"><div><h2>可用模型 <span class="count-badge" id="model-count">0</span></h2><p>优先使用网页配置的默认模型，支持默认模型和完整模型名称</p></div><button class="text-button" id="reload-models" type="button">刷新模型 ↻</button></div><p class="field-help" id="model-help">正在读取已配置的可用模型…</p><div class="model-catalog-list" id="model-catalog" role="list"></div><p class="field-help catalog-api">GET /v1/models · 包含推理级别、上下文窗口和最大输出长度</p></section></div>
         <div class="right-column"><section class="panel playground"><div class="panel-heading"><div><h2><span class="section-index">01</span>试运行</h2><p>发送一次真实请求，验证连接</p></div><span class="mini-label">PLAYGROUND</span></div><section class="runtime-diagnostics" aria-label="Pi 运行时与实际工具"><div class="diagnostics-heading"><h3>已启用研究工具 <span id="tool-count">—</span></h3><button type="button" class="text-button" id="refresh-tools">刷新诊断 ↻</button></div><p class="diagnostics-source">已注册的研究工具，由模型按需调用。</p><div class="tool-list" id="tool-list"><span class="small-muted">正在读取 Durable 工具信息…</span></div><p class="tool-guidance" id="tool-guidance">工具名单来自当前研究配置。</p><details class="runtime-details"><summary>Durable 运行状态 <span>+</span></summary><dl><div><dt>Pi Durable 版本</dt><dd id="runtime-version">—</dd></div><div><dt>本地存储</dt><dd id="runtime-storage">SQLite</dd></div><div><dt>本次启动恢复任务</dt><dd id="runtime-recovered">0</dd></div><div><dt>已注册研究工具</dt><dd id="runtime-available-tools">—</dd></div></dl></details></section><form id="playground-form"><div class="request-controls"><p class="field-help">以下选项仅用于本次试运行，不保存为服务配置。</p><div class="field"><label for="model">请求模型</label><select id="model" required><option value="">请选择模型</option></select></div><div class="field"><label for="effort">请求推理强度 <span class="label-detail">reasoning_effort</span></label><select id="effort"><option value="">Pi 默认 · 不发送</option></select></div><p class="field-help" id="request-model-info">选择模型后显示已配置的模型能力。</p></div><label class="sr-only" for="prompt">测试提示词</label><textarea id="prompt" rows="3" placeholder="给 Pi 一个任务…">用一句话介绍你自己。</textarea><div class="playground-actions"><button class="text-button" id="new-session" type="button" title="下次请求开启新会话">新会话 ↻</button><button class="button secondary" id="run-button" type="submit">发送请求 <span>→</span></button></div></form><form id="run-query-form" class="request-controls"><div class="field"><label for="run-query-id">查询或恢复查看任务</label><input id="run-query-id" placeholder="粘贴 X-Run-Id" spellcheck="false"></div><button class="button secondary" type="submit">查询任务</button><p class="field-help">刷新页面或服务重启后，可用原任务 ID 查看结果。查询不会重新执行任务。</p></form><div class="response-box" id="response-box" hidden><div class="response-heading"><span><span class="dot green"></span>RESPONSE</span><button class="text-button" id="stop-button" hidden>停止</button></div><section class="tool-run" id="tool-run" hidden aria-label="本轮工具调用"><div class="tool-run-heading"><h3>本轮工具调用</h3><span id="tool-run-count">0 次</span></div><p id="tool-run-note" role="status">等待工具事件…</p><ol id="tool-run-list" aria-live="polite"></ol></section><pre id="response-output" aria-live="polite"></pre><div id="response-meta"></div><details class="runtime-details" id="timing-panel" hidden><summary>耗时分解 <span>+</span></summary><dl id="timing-list"></dl><p class="field-help">并行请求的工作耗时会重叠，不能相加当作总耗时；中断前未记录的耗时未知。</p></details></div></section>
         <section class="panel integration"><div class="panel-heading"><div><h2>快速接入</h2><p>适用于任何 OpenAI SDK</p></div><button class="icon-button" id="copy-curl" aria-label="复制请求示例" title="复制请求示例">⧉</button></div><pre id="curl-example"></pre><div class="integration-footer"><span class="dot green"></span>支持流式输出与 X-Session-Id 多轮会话</div></section>
-        <section class="session-summary"><div><h3>运行中的会话</h3><button class="text-button" id="refresh-sessions">刷新 ↻</button></div><div id="session-list"><p class="empty-small">暂无会话。发送第一条请求开始。</p></div></section></div>
+        </div>
       </div><footer class="page-footer"><span>PiCall <span class="muted">/</span> 把 Agent 接入你的工作流</span><a href="/?tab=logs" target="_blank" rel="noopener">在新标签页查看日志 ↗</a></footer>
+    </section>
+    <section class="page sessions-page" id="sessions-view" hidden>
+      <div class="page-heading"><div><div class="eyebrow">SESSIONS</div><h1>会话历史</h1><p>任务结束后自动归档。选择历史查看记录，或使用原会话 ID 继续对话。</p></div><button class="button secondary" id="refresh-sessions" type="button">刷新会话 ↻</button></div>
+      <div class="sessions-workspace">
+        <section class="sessions-list-panel" aria-labelledby="session-list-title">
+          <div class="sessions-list-heading"><h2 id="session-list-title">会话列表</h2><span id="session-list-count" role="status">0 个会话</span></div>
+          <p id="session-list-error" class="session-error" role="alert" hidden></p>
+          <div id="session-list"><p class="empty-small">正在读取会话…</p></div>
+        </section>
+        <section class="session-records-panel" aria-label="会话记录" aria-busy="false">
+          <div id="session-placeholder"><span class="placeholder-symbol" aria-hidden="true">◫</span><h2>选择一个会话</h2><p>从左侧列表选择会话，在这里查看消息、工具结果与执行时间。</p></div>
+          <div id="session-records" hidden>
+            <div class="session-records-heading"><div><h2>会话记录</h2><code id="session-id"></code></div><div class="session-record-actions"><button id="copy-session-id" class="button secondary" type="button">复制 ID</button><button id="continue-session" class="button primary" type="button" disabled>继续此会话</button><button id="refresh-records" class="button secondary" type="button">刷新记录</button></div></div>
+            <p id="session-meta" role="status"></p>
+            <p class="timing-help">右侧为记录时间和所属任务耗时，包含等待与重试。同一任务的耗时不可累加，缺失值显示未知。</p>
+            <p id="session-error" class="session-error" role="alert" hidden></p>
+            <div class="items-panel" aria-label="会话 item 记录">
+              <div class="items-header"><span>ITEM / 内容</span><span id="time-heading">记录时间 / 执行耗时</span></div>
+              <p id="items-empty" hidden>这个会话还没有 item 记录。</p><ol id="session-items"></ol>
+            </div>
+            <div class="items-footer"><span id="item-count" role="status"></span><button id="load-more" class="button secondary" type="button" hidden>加载更多</button></div>
+          </div>
+        </section>
+      </div>
     </section>
     <section class="page settings-page" id="settings-view" hidden>
       <div class="page-heading"><div><div class="eyebrow">CONFIGURE YOUR WORKSPACE.</div><h1>服务设置<span>.</span></h1><p>在本机管理模型网关、搜索服务和工具策略；保存后开启新会话生效。</p></div><span class="pill">本机配置</span></div>
